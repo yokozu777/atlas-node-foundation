@@ -1,0 +1,2 @@
+# Role 01_backup_etc default variables (override in group_vars/all/atlas-node-foundation.yml or host_vars)
+backup_etc: false  # Create backup of /etc before configuration

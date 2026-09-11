@@ -1,0 +1,44 @@
+---
+- name: Configure SELinux
+  when:
+    - ansible_facts['distribution'] == 'OracleLinux'
+    - disable_selinux | default(false) | bool
+  block:
+    - name: Disable SELinux permanently
+      ansible.builtin.lineinfile:
+        path: /etc/selinux/config
+        regexp: '^SELINUX='
+        line: 'SELINUX=disabled'
+        backup: true
+
+    - name: Check current SELinux status
+      ansible.builtin.command: getenforce
+      register: selinux_status
+      changed_when: false
+      failed_when: false
+      ignore_errors: true
+
+    - name: Disable SELinux now (if enabled)
+      ansible.builtin.command: setenforce 0
+      when:
+        - selinux_status.rc == 0
+        - selinux_status.stdout is defined
+        - selinux_status.stdout not in ["Disabled", "disabled"]
+      changed_when: false
+      failed_when: false
+      ignore_errors: true
+
+- block:
+    - name: Stop AppArmor service on Ubuntu/Debian
+      ansible.builtin.service:
+        name: apparmor
+        state: stopped
+    
+    - name: Disable AppArmor service on Ubuntu/Debian
+      ansible.builtin.systemd:
+        name: apparmor
+        enabled: no
+  when:
+    - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+    - apparmor_disable | default(false) | bool
+

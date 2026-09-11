@@ -1,0 +1,26 @@
+---
+- name: Set hostname
+  ansible.builtin.hostname:
+    name: "{{ hostname }}"
+  register: hostname_changed
+  when: hostname is defined and hostname | length > 0
+
+- name: Restart systemd-hostnamed service
+  ansible.builtin.systemd:
+    name: systemd-hostnamed
+    state: restarted
+  when:
+    - hostname_changed.changed | default(false)
+    - ansible_facts['distribution'] in ['Ubuntu', 'Debian', 'OracleLinux']
+  ignore_errors: true
+
+- name: Restart systemd-networkd after hostname change
+  ansible.builtin.systemd:
+    name: systemd-networkd
+    state: restarted
+  when:
+    - hostname_changed.changed | default(false)
+    - ansible_facts['distribution'] in ['Ubuntu', 'Debian', 'OracleLinux']
+    # OL installs networkd later in 17_configure_network; skip if unit absent.
+    - "'systemd-networkd.service' in (ansible_facts.services | default({}))"
+  ignore_errors: true

@@ -1,0 +1,7 @@
+# Ansible managed: release interface to systemd-networkd
+[keyfile]
+{% if effective_network_interfaces[0].mac is defined and effective_network_interfaces[0].mac | length > 0 %}
+unmanaged-devices=mac:{{ effective_network_interfaces[0].mac }}
+{% else %}
+unmanaged-devices=interface-name:{{ effective_network_interfaces[0].name }}
+{% endif %}

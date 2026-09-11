@@ -1,0 +1,22 @@
+# Role 17_configure_network default variables (override in group_vars/all/atlas-node-foundation.yml or host_vars)
+# Backend: systemd-networkd on all supported OS types.
+#
+# Play-level batching (init_nodes.yaml): node_foundation_network_serial
+# Default "100%" = full parallel. Set to 1 for one-host-at-a-time handoff.
+
+# Empty = auto-discover L3 from the running host.
+# Populated = declarative override for systemd-networkd.
+network_interfaces: []
+
+# Default DNS for resolv.conf and .network units when item.dns is empty
+dns_servers: ["192.168.1.1"]
+
+# Fallback default gateway when runtime discovery returns empty (typical lab /24)
+network_default_gateway: "192.168.1.1"
+
+# Handoff poll retries (delay 2s between checks)
+networkd_handoff_attempts: 45
+
+# Public Oracle developer EPEL bootstrap before systemd-networkd (removed in role 13).
+oracle_bootstrap_epel_enabled: true
+oracle_bootstrap_epel_repo_file: /etc/yum.repos.d/atlas-bootstrap-OL-developer-EPEL.repo

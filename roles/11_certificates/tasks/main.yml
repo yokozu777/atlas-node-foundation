@@ -1,0 +1,174 @@
+---
+# CA from URL(s): always re-fetch (force) and replace dest when content/checksum
+# differs. After step-ca recreate, leaf trust stores must pick up the new root.
+# Ubuntu/Debian: /usr/local/share/ca-certificates + update-ca-certificates --fresh
+# Oracle Linux: /etc/pki/ca-trust/source/anchors + update-ca-trust extract
+#
+# SoT: pki_ca_url — string or list of HTTPS URLs (PEM roots).
+# Filenames: <hostname with dots→dashes>.crt (e.g. ca.example.com → ca-example-com.crt).
+
+- name: Normalize pki_ca_url to a list of download URLs
+  ansible.builtin.set_fact:
+    pki_ca_url_list: >-
+      {{
+        (
+          [pki_ca_url]
+          if pki_ca_url is string
+          else (pki_ca_url | default([], true))
+        )
+        | map('trim')
+        | reject('equalto', '')
+        | reject('match', '^#')
+        | list
+      }}
+  when: certificates_configure | bool
+
+- name: Set CA trust directory by distro
+  ansible.builtin.set_fact:
+    pki_ca_trust_dir: >-
+      {{
+        '/usr/local/share/ca-certificates'
+        if ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+        else '/etc/pki/ca-trust/source/anchors'
+      }}
+  when:
+    - certificates_configure | bool
+    - (pki_ca_url_list | default([]) | length) > 0
+    - ansible_facts['distribution'] in ['Ubuntu', 'Debian', 'OracleLinux']
+
+- name: Download and install CA certificate(s) from URL
+  ansible.builtin.get_url:
+    url: "{{ item }}"
+    dest: "{{ pki_ca_trust_dir }}/{{ item | urlsplit('hostname') | regex_replace('\\.', '-') }}.crt"
+    mode: "0644"
+    owner: root
+    group: root
+    force: true
+    validate_certs: "{{ ca_certificate_validate_certs | bool }}"
+  loop: "{{ pki_ca_url_list | default([]) }}"
+  register: ca_certificate_install
+  when:
+    - certificates_configure | bool
+    - pki_ca_trust_dir is defined
+    - (pki_ca_url_list | default([]) | length) > 0
+  loop_control:
+    label: "{{ item | urlsplit('hostname') }}"
+
+- name: Assert installed CA is a readable PEM certificate
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - x509
+      - -in
+      - "{{ pki_ca_trust_dir }}/{{ item | urlsplit('hostname') | regex_replace('\\.', '-') }}.crt"
+      - -noout
+      - -subject
+  changed_when: false
+  loop: "{{ pki_ca_url_list | default([]) }}"
+  when:
+    - certificates_configure | bool
+    - pki_ca_trust_dir is defined
+    - (pki_ca_url_list | default([]) | length) > 0
+    - ca_certificate_install is defined
+    - ca_certificate_install is not skipped
+  loop_control:
+    label: "{{ item | urlsplit('hostname') }}"
+
+- name: Refresh CA trust store after URL CA change (Ubuntu/Debian)
+  ansible.builtin.command: update-ca-certificates --fresh
+  when:
+    - certificates_configure | bool
+    - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+    - ca_certificate_install is defined
+    - ca_certificate_install is not skipped
+    - ca_certificate_install is changed
+
+- name: Refresh CA trust store after URL CA change (Oracle Linux)
+  ansible.builtin.command: update-ca-trust extract
+  when:
+    - certificates_configure | bool
+    - ansible_facts['distribution'] == 'OracleLinux'
+    - ca_certificate_install is defined
+    - ca_certificate_install is not skipped
+    - ca_certificate_install is changed
+
+- name: Check if custom certificates directory exists
+  ansible.builtin.stat:
+    path: "{{ playbook_dir }}/{{ custom_certs_dir }}"
+  register: custom_certs_dir_stat
+  when:
+    - certificates_configure | bool
+    - custom_certs_dir is defined
+    - custom_certs_dir | length > 0
+  delegate_to: localhost
+  become: false
+
+- name: Install custom certificates (Ubuntu/Debian)
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/{{ custom_certs_dir }}/"
+    dest: /usr/local/share/ca-certificates/
+    mode: "0644"
+    directory_mode: "0755"
+  register: custom_certs_install_deb
+  when:
+    - certificates_configure | bool
+    - custom_certs_dir is defined
+    - custom_certs_dir | length > 0
+    - custom_certs_dir_stat is not skipped
+    - custom_certs_dir_stat.stat.exists | default(false)
+    - custom_certs_dir_stat.stat.isdir | default(false)
+    - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+
+- name: Find custom certificate files on controller
+  ansible.builtin.find:
+    paths: "{{ playbook_dir }}/{{ custom_certs_dir }}"
+    patterns:
+      - "*.crt"
+      - "*.pem"
+    file_type: file
+  register: custom_cert_files
+  delegate_to: localhost
+  become: false
+  when:
+    - certificates_configure | bool
+    - custom_certs_dir is defined
+    - custom_certs_dir | length > 0
+    - custom_certs_dir_stat is not skipped
+    - custom_certs_dir_stat.stat.exists | default(false)
+    - custom_certs_dir_stat.stat.isdir | default(false)
+    - ansible_facts['distribution'] == 'OracleLinux'
+
+- name: Install custom certificates (Oracle Linux)
+  ansible.builtin.copy:
+    src: "{{ item.path }}"
+    dest: "/etc/pki/ca-trust/source/anchors/{{ item.path | basename }}"
+    mode: "0644"
+  loop: "{{ custom_cert_files.files | default([]) }}"
+  register: custom_certs_install_ol
+  when:
+    - certificates_configure | bool
+    - custom_certs_dir_stat is not skipped
+    - custom_certs_dir_stat.stat.exists | default(false)
+    - custom_certs_dir_stat.stat.isdir | default(false)
+    - ansible_facts['distribution'] == 'OracleLinux'
+    - (custom_cert_files.files | default([]) | length) > 0
+  loop_control:
+    label: "{{ item.path | basename }}"
+
+- name: Refresh CA trust store after custom certs (Ubuntu/Debian)
+  ansible.builtin.command: update-ca-certificates --fresh
+  when:
+    - certificates_configure | bool
+    - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+    - custom_certs_install_deb is defined
+    - custom_certs_install_deb is not skipped
+    - custom_certs_install_deb is changed
+
+- name: Refresh CA trust store after custom certs (Oracle Linux)
+  ansible.builtin.command: update-ca-trust extract
+  when:
+    - certificates_configure | bool
+    - ansible_facts['distribution'] == 'OracleLinux'
+    - custom_certs_install_ol is defined
+    - custom_certs_install_ol is not skipped
+    - custom_certs_install_ol is changed

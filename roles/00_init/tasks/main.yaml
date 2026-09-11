@@ -1,0 +1,62 @@
+- name: Wait for server to UP sshd
+  become: false
+  ansible.builtin.wait_for:
+    host: "{{ inventory_hostname }}"
+    port: "{{ initial_ssh_port | default(22) }}"
+    delay: 1
+    connect_timeout: 1
+  delegate_to: localhost
+
+# - name: Check if host vars file exists
+#   ansible.builtin.stat:
+#     path: "{{ (project_root | default(playbook_dir)) }}/{{ hostvars[inventory_hostname].vars_file }}"
+#   register: vars_file_stat
+#   when: hostvars[inventory_hostname].vars_file is defined
+
+# - name: Include host-specific vars
+#   ansible.builtin.include_vars:
+#     file: "{{ (project_root | default(playbook_dir)) }}/{{ hostvars[inventory_hostname].vars_file }}"
+#   when:
+#     - hostvars[inventory_hostname].vars_file is defined
+#     - vars_file_stat.stat.exists | default(false) | bool
+
+# - name: Set connection parameters for password authentication
+#   ansible.builtin.set_fact:
+#     ansible_user: "{{ initial_user }}"
+#     ansible_ssh_pass: "{{ initial_password }}"
+#   when: init_ssh_connect | default('password') == 'password'
+
+# - name: Set connection parameters for SSH key authentication
+#   ansible.builtin.set_fact:
+#     ansible_user: "{{ initial_user }}"
+#     ansible_ssh_pass: ""
+#   when: init_ssh_connect | default('password') == 'key'
+
+# - name: Set SSH private key file (only when initial_key_file is set; otherwise config key SSH_KEY is used)
+#   ansible.builtin.set_fact:
+#     ansible_ssh_private_key_file: "{{ playbook_dir + '/' + initial_key_file }}"
+#   when: init_ssh_connect | default('password') == 'key' and (initial_key_file | default('')) | length > 0
+
+- name: Ensure remote_tmp directory exists
+  ansible.builtin.file:
+    path: /root/.ansible/tmp
+    state: directory
+    mode: '0755'
+
+- name: Detect boot loader
+  ansible.builtin.shell: >
+    if [ -d /sys/firmware/efi ]; then
+      if ls /boot/efi/EFI/*/grub.cfg >/dev/null 2>&1; then
+        echo efi-grub
+      else
+        echo efi
+      fi
+    else
+      echo bios
+    fi
+  register: boot_mode
+  changed_when: false
+
+- name: Set global fact for boot loader
+  ansible.builtin.set_fact:
+    global_boot_mode: "{{ boot_mode.stdout.strip() }}"

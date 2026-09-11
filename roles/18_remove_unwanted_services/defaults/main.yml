@@ -1,0 +1,6 @@
+# Role 18_remove_unwanted_services default variables (override in group_vars/all/atlas-node-foundation.yml or host_vars)
+remove_cloud_init: true  # Remove cloud-init when true
+remove_snap: true  # Remove snap when true (Ubuntu only)
+disable_systemd_resolved: true  # Disable systemd-resolved (Ubuntu/Debian only)
+remove_unattended_upgrades: true  # Remove unattended-upgrades and disable apt periodic timers (Ubuntu/Debian only)
+disable_auditd: true  # Stop, mask, remove auditd; audit=0 in GRUB (Oracle: purge audit package)

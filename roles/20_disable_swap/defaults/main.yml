@@ -1,0 +1,2 @@
+# Disable swap (fstab, swapoff, discovered LVM swap volumes + GRUB when applicable)
+disable_swap: true

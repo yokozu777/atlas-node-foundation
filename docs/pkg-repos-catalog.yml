@@ -1,0 +1,600 @@
+# Machine-readable SoT for package repo slugs and official upstream URLs.
+# Human guide: pkg-repos-catalog.md  |  Client contract: pkg-repos-contract.md
+#
+# Phase 1 (2026-07-29): catalog complete. Infra mirror coverage noted per entry.
+# Waves A–D (2026-07-30): example_leaf_lists for k8s/jenkins; docs/gates hardened.
+# name == client pkg_repos[].name == infra pkg_repo_upstreams.slug (after templating).
+
+version: 1
+updated: "2026-07-30"
+phase: 1
+
+# Patterns (not concrete inventory names)
+patterns:
+  k8s_apt:
+    name_template: "k8s-ubuntu-{{ k8s_apt_repo_version }}"
+    official_url_template: "https://pkgs.k8s.io/core:/stable:/v{{ k8s_apt_repo_version }}/deb/"
+    upstream_host: pkgs.k8s.io
+    family: apt
+  k8s_yum:
+    name_template: "k8s-{{ k8s_apt_repo_version }}"
+    official_url_template: "https://pkgs.k8s.io/core:/stable:/v{{ k8s_apt_repo_version }}/rpm/"
+    upstream_host: pkgs.k8s.io
+    family: yum
+
+# Concrete slugs (static names)
+repos:
+  - name: debian-main
+    family: apt
+    official_url: "https://deb.debian.org/debian"
+    upstream_host: deb.debian.org
+    drop_in: "/etc/apt/sources.list.d/debian-main.sources"
+    signed_by: "/usr/share/keyrings/debian-archive-keyring.gpg"
+    infra_mirror: present
+    notes: "Suites from ansible_distribution_release (+ updates)."
+
+  - name: debian-security
+    family: apt
+    official_url: "https://deb.debian.org/debian-security"
+    upstream_host: deb.debian.org
+    drop_in: "/etc/apt/sources.list.d/debian-security.sources"
+    signed_by: "/usr/share/keyrings/debian-archive-keyring.gpg"
+    infra_mirror: present
+    notes: "Suite {{ release }}-security."
+
+  - name: debian-non-free
+    family: apt
+    official_url: "https://deb.debian.org/debian"
+    upstream_host: deb.debian.org
+    drop_in: "/etc/apt/sources.list.d/debian-non-free.sources"
+    signed_by: "/usr/share/keyrings/debian-archive-keyring.gpg"
+    infra_mirror: present
+    notes: "Same Debian host tree; Components contrib/non-free/non-free-firmware (bookworm+)."
+
+  - name: ubuntu
+    family: apt
+    official_url: "https://archive.ubuntu.com/ubuntu"
+    upstream_host: archive.ubuntu.com
+    drop_in: "/etc/apt/sources.list.d/ubuntu.sources"
+    signed_by: "/usr/share/keyrings/ubuntu-archive-keyring.gpg"
+    infra_mirror: present
+    notes: "release, updates, backports, security suites in template."
+
+  - name: debian-containerd
+    family: apt
+    official_url: "https://download.docker.com/linux/debian"
+    upstream_host: download.docker.com
+    drop_in: "/etc/apt/sources.list.d/debian-containerd.sources"
+    infra_mirror: present
+    notes: "Docker CE / containerd for Debian."
+
+  - name: ubuntu-containerd
+    family: apt
+    official_url: "https://download.docker.com/linux/ubuntu"
+    upstream_host: download.docker.com
+    drop_in: "/etc/apt/sources.list.d/ubuntu-containerd.sources"
+    infra_mirror: present
+    notes: "Docker CE / containerd for Ubuntu."
+
+  - name: pgdg-apt
+    family: apt
+    official_url: "https://apt.postgresql.org/pub/repos/apt"
+    upstream_host: apt.postgresql.org
+    drop_in: "/etc/apt/sources.list.d/pgdg-apt.sources"
+    signed_by: "/usr/share/keyrings/postgresql.gpg"
+    infra_mirror: present
+    notes: >-
+      Suite {{ release }}-pgdg. Legacy enable_repo_pgdg / enable_repo_pgdg_apt
+      on Debian/Ubuntu. Infra pkg_repo_upstreams present (Phase 3).
+
+  - name: pgdg-yum
+    family: yum
+    official_url: "https://download.postgresql.org/pub/repos/yum"
+    upstream_host: download.postgresql.org
+    drop_in: "/etc/yum.repos.d/pgdg-yum.repo"
+    infra_mirror: present
+    notes: >-
+      baseurl path under mirror: /{{ pgsql_version }}/redhat/rhel-{{ major }}-x86_64/.
+      Legacy enable_repo_pgdg / enable_repo_pgdg_yum on Oracle. Infra upstream present (Phase 3).
+
+  - name: yum_docker-ce-stable-9
+    family: yum
+    official_url: "https://download.docker.com/linux/centos/9/x86_64/stable"
+    upstream_host: download.docker.com
+    drop_in: "/etc/yum.repos.d/yum_docker-ce-stable-9.repo"
+    infra_mirror: present
+    notes: "OL9 / EL9 Docker CE. Legacy flag enable_repo_yum_docker_ce_stable_9."
+
+  - name: yum_docker-ce-stable-10
+    family: yum
+    official_url: "https://download.docker.com/linux/centos/10/x86_64/stable"
+    upstream_host: download.docker.com
+    drop_in: "/etc/yum.repos.d/yum_docker-ce-stable-10.repo"
+    infra_mirror: present
+    notes: "OL10 / EL10 Docker CE."
+
+  - name: gitlab-runner-ubuntu
+    family: apt
+    official_url: "https://packages.gitlab.com/runner/gitlab-runner/ubuntu"
+    upstream_host: packages.gitlab.com
+    drop_in: "/etc/apt/sources.list.d/gitlab-runner.sources"
+    infra_mirror: present
+    notes: >-
+      Client drop-in written by atlas-gitlab-runner (not foundation 13_configure_repo).
+      Warm flag enable_repo_gitlab_runner_ubuntu.
+
+  - name: gitlab-runner-debian
+    family: apt
+    official_url: "https://packages.gitlab.com/runner/gitlab-runner/debian"
+    upstream_host: packages.gitlab.com
+    drop_in: "/etc/apt/sources.list.d/gitlab-runner.sources"
+    infra_mirror: present
+    notes: >-
+      Client drop-in written by atlas-gitlab-runner (not foundation 13_configure_repo).
+      Warm flag enable_repo_gitlab_runner_debian.
+
+  - name: gitlab-runner-el
+    family: yum
+    official_url: "https://packages.gitlab.com/runner/gitlab-runner/el/9/x86_64"
+    upstream_host: packages.gitlab.com
+    drop_in: "/etc/yum.repos.d/gitlab-runner.repo"
+    infra_mirror: present
+    notes: >-
+      EL9 x86_64 pin for nginx path_prefix (same pattern as yum_docker-ce-stable-9).
+      Client written by atlas-gitlab-runner. Warm flag enable_repo_gitlab_runner_el.
+
+  - name: OL9_baseos
+    family: yum
+    official_url: "https://yum.oracle.com/repo/OracleLinux/OL9/baseos/latest/x86_64/"
+    upstream_host: yum.oracle.com
+    drop_in: "/etc/yum.repos.d/OL9_baseos.repo"
+    infra_mirror: present
+
+  - name: OL9_appstream
+    family: yum
+    official_url: "https://yum.oracle.com/repo/OracleLinux/OL9/appstream/x86_64/"
+    upstream_host: yum.oracle.com
+    drop_in: "/etc/yum.repos.d/OL9_appstream.repo"
+    infra_mirror: present
+
+  - name: OL9_addons
+    family: yum
+    official_url: "https://yum.oracle.com/repo/OracleLinux/OL9/addons/x86_64/"
+    upstream_host: yum.oracle.com
+    drop_in: "/etc/yum.repos.d/OL9_addons.repo"
+    infra_mirror: present
+
+  - name: OL9_developer
+    family: yum
+    official_url: "https://yum.oracle.com/repo/OracleLinux/OL9/developer/x86_64/"
+    upstream_host: yum.oracle.com
+    drop_in: "/etc/yum.repos.d/OL9_developer.repo"
+    infra_mirror: present
+
+  - name: OL9_developer_EPEL
+    family: yum
+    official_url: "https://yum.oracle.com/repo/OracleLinux/OL9/developer/EPEL/x86_64/"
+    upstream_host: yum.oracle.com
+    drop_in: "/etc/yum.repos.d/OL9_developer_EPEL.repo"
+    infra_mirror: present
+    notes: "Also used as temporary network bootstrap source before managed repos."
+
+  - name: OL9_codeready_builder
+    family: yum
+    official_url: "https://yum.oracle.com/repo/OracleLinux/OL9/codeready/builder/x86_64/"
+    upstream_host: yum.oracle.com
+    drop_in: "/etc/yum.repos.d/OL9_codeready_builder.repo"
+    infra_mirror: present
+    notes: "CRB; provides python3-wheel-wheel required by EPEL python3-virtualenv."
+
+  - name: OL9_kvm
+    family: yum
+    official_url: "https://yum.oracle.com/repo/OracleLinux/OL9/kvm/utils/x86_64/"
+    upstream_host: yum.oracle.com
+    drop_in: "/etc/yum.repos.d/OL9_kvm.repo"
+    infra_mirror: present
+
+  - name: OL9_MODRHCK
+    family: yum
+    official_url: "https://yum.oracle.com/repo/OracleLinux/OL9/MODRHCK/x86_64/"
+    upstream_host: yum.oracle.com
+    drop_in: "/etc/yum.repos.d/OL9_MODRHCK.repo"
+    infra_mirror: present
+
+  - name: OL9_oraclelinuxmanager210
+    family: yum
+    official_url: "https://yum.oracle.com/repo/OracleLinux/OL9/oraclelinuxmanager210/client/x86_64/"
+    upstream_host: yum.oracle.com
+    drop_in: "/etc/yum.repos.d/OL9_oraclelinuxmanager210.repo"
+    infra_mirror: present
+
+  - name: OL9_RDMA
+    family: yum
+    official_url: "https://yum.oracle.com/repo/OracleLinux/OL9/RDMA/x86_64/"
+    upstream_host: yum.oracle.com
+    drop_in: "/etc/yum.repos.d/OL9_RDMA.repo"
+    infra_mirror: present
+
+  - name: OL9_UEKR7
+    family: yum
+    official_url: "https://yum.oracle.com/repo/OracleLinux/OL9/UEKR7/x86_64/"
+    upstream_host: yum.oracle.com
+    drop_in: "/etc/yum.repos.d/OL9_UEKR7.repo"
+    infra_mirror: present
+
+  - name: OL9_UEKR8
+    family: yum
+    official_url: "https://yum.oracle.com/repo/OracleLinux/OL9/UEKR8/x86_64/"
+    upstream_host: yum.oracle.com
+    drop_in: "/etc/yum.repos.d/OL9_UEKR8.repo"
+    infra_mirror: present
+
+  - name: OL10_baseos
+    family: yum
+    official_url: "https://yum.oracle.com/repo/OracleLinux/OL10/baseos/latest/x86_64/"
+    upstream_host: yum.oracle.com
+    drop_in: "/etc/yum.repos.d/OL10_baseos.repo"
+    infra_mirror: present
+
+  - name: OL10_appstream
+    family: yum
+    official_url: "https://yum.oracle.com/repo/OracleLinux/OL10/appstream/x86_64/"
+    upstream_host: yum.oracle.com
+    drop_in: "/etc/yum.repos.d/OL10_appstream.repo"
+    infra_mirror: present
+
+  - name: OL10_addons
+    family: yum
+    official_url: "https://yum.oracle.com/repo/OracleLinux/OL10/addons/x86_64/"
+    upstream_host: yum.oracle.com
+    drop_in: "/etc/yum.repos.d/OL10_addons.repo"
+    infra_mirror: present
+
+  - name: OL10_developer
+    family: yum
+    official_url: "https://yum.oracle.com/repo/OracleLinux/OL10/developer/x86_64/"
+    upstream_host: yum.oracle.com
+    drop_in: "/etc/yum.repos.d/OL10_developer.repo"
+    infra_mirror: present
+
+  - name: OL10_developer_EPEL
+    family: yum
+    official_url: "https://yum.oracle.com/repo/OracleLinux/OL10/0/developer/EPEL/x86_64/"
+    upstream_host: yum.oracle.com
+    drop_in: "/etc/yum.repos.d/OL10_developer_EPEL.repo"
+    infra_mirror: present
+    notes: "Path includes /0/ as in current infra SoT."
+
+  - name: OL10_RDMA
+    family: yum
+    official_url: "https://yum.oracle.com/repo/OracleLinux/OL10/RDMA/x86_64/"
+    upstream_host: yum.oracle.com
+    drop_in: "/etc/yum.repos.d/OL10_RDMA.repo"
+    infra_mirror: present
+
+  - name: OL10_UEKR8
+    family: yum
+    official_url: "https://yum.oracle.com/repo/OracleLinux/OL10/UEKR8/x86_64/"
+    upstream_host: yum.oracle.com
+    drop_in: "/etc/yum.repos.d/OL10_UEKR8.repo"
+    infra_mirror: present
+
+  - name: OL10_builder
+    family: yum
+    official_url: "https://yum.oracle.com/repo/OracleLinux/OL10/distro/builder/x86_64/"
+    upstream_host: yum.oracle.com
+    drop_in: "/etc/yum.repos.d/OL10_builder.repo"
+    infra_mirror: present
+
+# Legacy enable_repo_* → target name(s) (for Phase 2/5 migration tables)
+legacy_enable_map:
+  enable_repo_ubuntu: [ubuntu]
+  enable_repo_debian_main: [debian-main]
+  enable_repo_debian_security: [debian-security]
+  enable_repo_debian_non_free: [debian-non-free]
+  enable_repo_pgdg: [pgdg-apt, pgdg-yum]  # OS picks which drop-in
+  enable_repo_yum_docker_ce_stable_9: [yum_docker-ce-stable-9]
+  enable_repo_yum_docker_ce_stable_10: [yum_docker-ce-stable-10]
+  enable_repo_OL9_baseos: [OL9_baseos]
+  enable_repo_OL9_appstream: [OL9_appstream]
+  enable_repo_OL9_addons: [OL9_addons]
+  enable_repo_OL9_developer: [OL9_developer]
+  enable_repo_OL9_developer_EPEL: [OL9_developer_EPEL]
+  enable_repo_OL9_codeready_builder: [OL9_codeready_builder]
+  enable_repo_OL9_kvm: [OL9_kvm]
+  enable_repo_OL9_MODRHCK: [OL9_MODRHCK]
+  enable_repo_OL9_oraclelinuxmanager210: [OL9_oraclelinuxmanager210]
+  enable_repo_OL9_RDMA: [OL9_RDMA]
+  enable_repo_OL9_UEKR7: [OL9_UEKR7]
+  enable_repo_OL9_UEKR8: [OL9_UEKR8]
+  enable_repo_OL10_baseos: [OL10_baseos]
+  enable_repo_OL10_appstream: [OL10_appstream]
+  enable_repo_OL10_addons: [OL10_addons]
+  enable_repo_OL10_developer: [OL10_developer]
+  enable_repo_OL10_developer_EPEL: [OL10_developer_EPEL]
+  enable_repo_OL10_RDMA: [OL10_RDMA]
+  enable_repo_OL10_UEKR8: [OL10_UEKR8]
+  enable_repo_OL10_builder: [OL10_builder]
+  enable_repo_debian_containerd: [debian-containerd]
+  enable_repo_ubuntu_containerd: [ubuntu-containerd]
+  enable_repo_pgdg_apt: [pgdg-apt]
+  enable_repo_pgdg_yum: [pgdg-yum]
+  enable_repo_gitlab_runner_ubuntu: [gitlab-runner-ubuntu]
+  enable_repo_gitlab_runner_debian: [gitlab-runner-debian]
+  enable_repo_gitlab_runner_el: [gitlab-runner-el]
+  # Versioned k8s inventory flags (examples for 1.36; substitute version digits):
+  enable_repo_k8s_1_36: [k8s-1.36]  # pattern k8s_<ver with _> → k8s-<ver with .>
+  enable_repo_k8s_ubuntu_1_36: [k8s-ubuntu-1.36]
+
+# Example effective lists (guidance). Inventory may split OS base into
+# <env>/default pkg_repos + leaf pkg_repos_extra; gates compare the concat.
+# Keys under foundation_* = atlas-node-foundation client enable set
+# Keys under infra_mirror_* = atlas-infra-edge.yml enable_repo_*: true (nginx warm set)
+example_leaf_lists:
+  foundation_dev/postgresql:
+    - ubuntu
+    - debian-main
+    - debian-security
+    - OL9_baseos
+    - OL9_appstream
+    - OL9_developer_EPEL
+    - OL9_codeready_builder
+    - OL10_baseos
+    - OL10_appstream
+    - OL10_developer_EPEL
+    - pgdg-apt
+    - pgdg-yum
+  foundation_dev/redis:
+    - ubuntu
+    - debian-main
+    - debian-security
+    - OL9_baseos
+    - OL9_appstream
+    - OL9_developer_EPEL
+    - OL9_codeready_builder
+    - OL10_baseos
+    - OL10_appstream
+    - OL10_developer_EPEL
+  foundation_dev/kafka:
+    - ubuntu
+    - debian-main
+    - debian-security
+    - OL9_baseos
+    - OL9_appstream
+    - OL9_developer_EPEL
+    - OL9_codeready_builder
+    - OL10_baseos
+    - OL10_appstream
+    - OL10_developer_EPEL
+  foundation_dev/jenkins:
+    - ubuntu
+    - debian-main
+    - debian-security
+    - OL9_baseos
+    - OL9_appstream
+    - OL9_developer_EPEL
+    - OL9_codeready_builder
+    - OL10_baseos
+    - OL10_appstream
+    - OL10_developer_EPEL
+    - ubuntu-containerd
+    - debian-containerd
+    - yum_docker-ce-stable-9
+    - yum_docker-ce-stable-10
+  foundation_dev/gitlab:
+    - ubuntu
+    - debian-main
+    - debian-security
+    - OL9_baseos
+    - OL9_appstream
+    - OL9_developer_EPEL
+    - OL9_codeready_builder
+    - OL10_baseos
+    - OL10_appstream
+    - OL10_developer_EPEL
+    - ubuntu-containerd
+    - debian-containerd
+    - yum_docker-ce-stable-9
+    - yum_docker-ce-stable-10
+  foundation_dev/infra:
+    - ubuntu
+    - debian-main
+    - debian-security
+    - OL9_baseos
+    - OL9_appstream
+    - OL9_developer_EPEL
+    - OL9_codeready_builder
+    - OL10_baseos
+    - OL10_appstream
+    - OL10_developer_EPEL
+    - ubuntu-containerd
+    - debian-containerd
+    - yum_docker-ce-stable-9
+    - yum_docker-ce-stable-10
+  foundation_dev/k8s:
+    - ubuntu
+    - debian-main
+    - debian-security
+    - OL9_baseos
+    - OL9_appstream
+    - OL9_developer_EPEL
+    - OL9_codeready_builder
+    - OL10_baseos
+    - OL10_appstream
+    - OL10_developer_EPEL
+    - debian-containerd
+    - ubuntu-containerd
+    - k8s-ubuntu-1.36
+    - k8s-1.36
+    - yum_docker-ce-stable-9
+    - yum_docker-ce-stable-10
+    - OL9_UEKR7
+    - OL9_UEKR8
+    - OL10_UEKR8
+  # foundation_ci/* — template / historical compact guidance (aligns with
+  # clusterctl _template leaves). Live inventory gates use foundation_dev/*.
+  foundation_ci/postgresql:
+    - ubuntu
+    - debian-main
+    - debian-security
+    - pgdg-apt
+    - pgdg-yum
+    - OL9_baseos
+    - OL9_appstream
+    - OL9_developer_EPEL
+    - OL9_codeready_builder
+  foundation_lab/pgsql:
+    - ubuntu
+    - debian-main
+    - debian-security
+    - pgdg-apt
+    - pgdg-yum
+    - OL9_baseos
+    - OL9_appstream
+    - OL9_developer_EPEL
+    - OL9_codeready_builder
+  foundation_ci/redis:
+    - ubuntu
+    - debian-main
+    - debian-security
+    - OL9_baseos
+    - OL9_appstream
+    - OL9_developer_EPEL
+    - OL9_codeready_builder
+  foundation_ci/kafka:
+    - ubuntu
+    - debian-main
+    - debian-security
+    - OL9_baseos
+    - OL9_appstream
+    - OL9_developer_EPEL
+    - OL9_codeready_builder
+  foundation_lab/kafka:
+    - ubuntu
+    - debian-main
+    - debian-security
+    - OL9_baseos
+    - OL9_appstream
+    - OL9_developer_EPEL
+    - OL9_codeready_builder
+  foundation_ci/jenkins:
+    - ubuntu
+    - debian-main
+    - debian-security
+    - ubuntu-containerd
+    - debian-containerd
+    - yum_docker-ce-stable-9
+    - OL9_baseos
+    - OL9_appstream
+    - OL9_developer_EPEL
+    - OL9_codeready_builder
+  foundation_ci/gitlab:
+    - ubuntu
+    - debian-main
+    - debian-security
+    - ubuntu-containerd
+    - debian-containerd
+    - yum_docker-ce-stable-9
+    - OL9_baseos
+    - OL9_appstream
+    - OL9_developer_EPEL
+    - OL9_codeready_builder
+  foundation_ci/infra:
+    - ubuntu
+    - yum_docker-ce-stable-9
+    - OL9_baseos
+    - OL9_appstream
+    - OL9_developer_EPEL
+    - OL9_codeready_builder
+  # Legacy alias of foundation_dev/k8s — keep identical set and order.
+  foundation_dev/mxhash:
+    - ubuntu
+    - debian-main
+    - debian-security
+    - OL9_baseos
+    - OL9_appstream
+    - OL9_developer_EPEL
+    - OL9_codeready_builder
+    - OL10_baseos
+    - OL10_appstream
+    - OL10_developer_EPEL
+    - debian-containerd
+    - ubuntu-containerd
+    - k8s-ubuntu-1.36
+    - k8s-1.36
+    - yum_docker-ce-stable-9
+    - yum_docker-ce-stable-10
+    - OL9_UEKR7
+    - OL9_UEKR8
+    - OL10_UEKR8
+  foundation_k8s_full:
+    - debian-main
+    - debian-security
+    - debian-containerd
+    - ubuntu
+    - ubuntu-containerd
+    - k8s-ubuntu-1.36
+    - k8s-1.36
+    - yum_docker-ce-stable-9
+    - yum_docker-ce-stable-10
+    - OL9_baseos
+    - OL9_appstream
+    - OL9_developer_EPEL
+    - OL9_codeready_builder
+    - OL9_UEKR7
+    - OL9_UEKR8
+    - OL10_baseos
+    - OL10_appstream
+    - OL10_developer_EPEL
+    - OL10_UEKR8
+  # Infra warm set must cover every guest distro mirror this site serves.
+  infra_mirror_ci/infra:
+    - debian-main
+    - debian-security
+    - debian-containerd
+    - ubuntu
+    - ubuntu-containerd
+    - pgdg-apt
+    - pgdg-yum
+    - k8s-ubuntu-1.36
+    - k8s-1.36
+    - yum_docker-ce-stable-9
+    - yum_docker-ce-stable-10
+    - gitlab-runner-ubuntu
+    - gitlab-runner-debian
+    - gitlab-runner-el
+    - OL9_baseos
+    - OL9_appstream
+    - OL9_developer_EPEL
+    - OL9_codeready_builder
+    - OL9_UEKR7
+    - OL9_UEKR8
+    - OL10_baseos
+    - OL10_appstream
+    - OL10_developer_EPEL
+    - OL10_UEKR8
+  infra_mirror_dev/mxhash:
+    - debian-main
+    - debian-security
+    - debian-containerd
+    - ubuntu
+    - ubuntu-containerd
+    - pgdg-apt
+    - pgdg-yum
+    - k8s-ubuntu-1.36
+    - k8s-1.36
+    - yum_docker-ce-stable-9
+    - yum_docker-ce-stable-10
+    - gitlab-runner-ubuntu
+    - gitlab-runner-debian
+    - gitlab-runner-el
+    - OL9_baseos
+    - OL9_appstream
+    - OL9_developer_EPEL
+    - OL9_codeready_builder
+    - OL9_UEKR7
+    - OL9_UEKR8
+    - OL10_baseos
+    - OL10_appstream
+    - OL10_developer_EPEL
+    - OL10_UEKR8

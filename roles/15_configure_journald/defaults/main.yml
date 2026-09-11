@@ -1,0 +1,12 @@
+# Role 15_configure_journald default variables (override in group_vars/all/atlas-node-foundation.yml or host_vars)
+
+configure_journald: true
+journald_disabled: false
+journald_max_disk_use: 2G
+journald_max_age: 30day
+journald_max_level: info
+
+# Fixed in role (not exposed in group_vars for MVP)
+journald_system_keep_free: 1G
+journald_logrotate_rotate: 4
+journald_logrotate_frequency: weekly

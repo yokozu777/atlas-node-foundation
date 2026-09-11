@@ -1,0 +1,77 @@
+---
+- name: Update system packages immediately (Ubuntu/Debian)
+  ansible.builtin.apt:
+    update_cache: true
+    upgrade: full
+    autoremove: true
+  when:
+    - update_now | default(false)
+    - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+
+- name: Update system packages immediately (Oracle Linux)
+  ansible.builtin.command: dnf update -y
+  when:
+    - update_now | default(false)
+    - ansible_facts['distribution'] == 'OracleLinux'
+
+- name: Remove unused packages (Oracle Linux)
+  ansible.builtin.command: dnf autoremove -y
+  when:
+    - update_now | default(false)
+    - ansible_facts['distribution'] == 'OracleLinux'
+
+- name: Configure unattended-upgrades (Ubuntu/Debian)
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Download-Upgradeable-Packages "1";
+      APT::Periodic::AutocleanInterval "7";
+      APT::Periodic::Unattended-Upgrade "1";
+    mode: '0644'
+  when:
+    - system_update_scheduler | default(false)
+    - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+
+- name: Ensure cron is installed (Ubuntu/Debian)
+  ansible.builtin.apt:
+    name: cron
+    state: present
+  when:
+    - system_update_scheduler | default(false)
+    - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+
+- name: Create cron job for system updates (Ubuntu/Debian)
+  ansible.builtin.cron:
+    name: "Automatic updates"
+    minute: "{{ update_schedule_time.split(':')[1] }}"
+    hour: "{{ update_schedule_time.split(':')[0] }}"
+    job: "apt update && apt full-upgrade -y && apt autoremove -y"
+    state: present
+  when:
+    - system_update_scheduler | default(false)
+    - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+
+- name: Ensure cron is installed (Oracle Linux)
+  ansible.builtin.dnf:
+    name: cronie
+    state: present
+  when:
+    - system_update_scheduler | default(false)
+    - ansible_facts['distribution'] == 'OracleLinux'
+
+- name: Create cron job for system updates (Oracle Linux)
+  ansible.builtin.cron:
+    name: "Automatic updates"
+    minute: "{{ update_schedule_time.split(':')[1] }}"
+    hour: "{{ update_schedule_time.split(':')[0] }}"
+    job: "dnf update -y && dnf autoremove -y"
+    state: present
+  when:
+    - system_update_scheduler | default(false)
+    - ansible_facts['distribution'] == 'OracleLinux'
+
+- name: Reboot the system
+  ansible.builtin.reboot:
+    reboot_timeout: 300
+  when: reboot_system

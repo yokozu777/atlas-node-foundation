@@ -1,0 +1,2 @@
+# Role 10_manage_services default variables (override in group_vars/all/atlas-node-foundation.yml or host_vars)
+services_to_disable: []  # List of { name: "service1", disable: true/false } to enable/disable

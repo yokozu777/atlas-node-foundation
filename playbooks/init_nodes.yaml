@@ -1,0 +1,78 @@
+---
+# OS bootstrap (atlas-node-foundation)
+# Vars: group_vars/all/atlas-node-foundation.yml (and optional host_vars)
+#
+# Targeting:
+#   node_foundation_init_hosts — Ansible host pattern (default: all)
+#   00_gather_facts — explicit tag; clusterctl puts it on the first remote init
+#   invocation (with root_ssh). Not `always`: ensure-only steps must stay localhost.
+#   Later --tags reuse ansible_facts via fact_caching=jsonfile (see ansible.cfg).
+
+- hosts: localhost
+  gather_facts: false
+  tags: [00_ensure_workspace]
+  roles:
+    - role: 00_ensure_workspace
+
+- hosts: "{{ node_foundation_init_hosts | default('all', true) }}"
+  become: true
+  strategy: linear
+  roles:
+    - role: 00_gather_facts
+      tags: [00_gather_facts, gather_facts]
+    - role: 00_init
+      tags: [00_init, initial, setup]
+    - role: 01_backup_etc
+      tags: [01_backup_etc, backup, initial]
+    - role: 02_init_sshd
+      tags: [02_init_sshd, ssh, security]
+    - role: 03_configure_users
+      tags: [03_configure_users, users]
+    - role: 04_configure_hostname
+      tags: [04_configure_hostname, system]
+    - role: 06_configure_kernel
+      tags: [06_configure_kernel, system, kernel]
+    - role: 08_configure_security
+      tags: [08_configure_security, security]
+    - role: 09_configure_locales
+      tags: [09_configure_locales, system, locale]
+    - role: 10_manage_services
+      tags: [10_manage_services, system, services]
+    - role: 11_certificates
+      tags: [11_certificates, security, certificates]
+    - role: 12_date_timezone
+      tags: [12_date_timezone, system, time]
+    - role: 13_configure_repo
+      tags: [13_configure_repo, packages, repo]
+    - role: 14_install_software
+      tags: [14_install_software, packages]
+    - role: 15_configure_journald
+      tags: [15_configure_journald, system, logging, journald]
+    - role: 16_configure_bash
+      tags: [16_configure_bash, shell, bash]
+    - role: 18_remove_unwanted_services
+      tags: [18_remove_unwanted_services, system, cleanup]
+    - role: 19_configure_sysctl_limits
+      tags: [19_configure_sysctl_limits, system, performance]
+    - role: 20_disable_swap
+      tags: [20_disable_swap, system, swap]
+    - role: 21_grow_disk_to_full
+      tags: [21_grow_disk_to_full, system, disk, lvm]
+    - role: 22_extend_swap_to_root
+      tags: [22_extend_swap_to_root, system, disk, lvm]
+    - role: 23_init_data_disk
+      tags: [23_init_data_disk, system, disk, rook]
+    - role: 99_update_reboot
+      tags: [99_update_reboot, final, update, reboot]
+
+# Network play batching (NM → systemd-networkd handoff):
+#   node_foundation_network_serial: "100%"  — all hosts in one batch (default)
+#   node_foundation_network_serial: 1       — one host at a time (safer cold bootstrap)
+#   node_foundation_network_serial: 2       — fixed-size batches
+- hosts: "{{ node_foundation_init_hosts | default('all', true) }}"
+  become: true
+  serial: "{{ node_foundation_network_serial | default('100%') }}"
+  strategy: linear
+  roles:
+    - role: 17_configure_network
+      tags: [17_configure_network, network]

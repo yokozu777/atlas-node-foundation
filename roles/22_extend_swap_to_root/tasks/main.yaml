@@ -1,0 +1,66 @@
+---
+- name: Extend root logical volume with free space in volume group
+  when: >-
+    (extend_swap_to_root | default(true) | bool)
+    or (grow_disk_to_full | default(false) | bool)
+  block:
+    - name: Discover root filesystem device
+      ansible.builtin.command: findmnt -n -o SOURCE /
+      register: extend_swap_to_root_source
+      changed_when: false
+
+    - name: Discover root filesystem type
+      ansible.builtin.command: findmnt -n -o FSTYPE /
+      register: extend_swap_to_root_fstype
+      changed_when: false
+
+    - name: Discover root LVM volume group and logical volume
+      ansible.builtin.shell: |
+        set -euo pipefail
+        lvs --noheadings -o vg_name,lv_name {{ extend_swap_to_root_source.stdout | quote }}
+      args:
+        executable: /bin/bash
+      register: extend_swap_to_root_lvm
+      changed_when: false
+      failed_when: false
+
+    - name: Set discovered root LVM facts
+      ansible.builtin.set_fact:
+        extend_swap_to_root_vg: "{{ extend_swap_to_root_lvm.stdout.split()[0] }}"
+        extend_swap_to_root_lv: "{{ extend_swap_to_root_lvm.stdout.split()[1] }}"
+        extend_swap_to_root_is_lvm: true
+      when:
+        - extend_swap_to_root_lvm.rc == 0
+        - extend_swap_to_root_lvm.stdout | trim | length > 0
+
+    - name: Set non-LVM root fact
+      ansible.builtin.set_fact:
+        extend_swap_to_root_is_lvm: false
+      when: extend_swap_to_root_lvm.rc != 0 or extend_swap_to_root_lvm.stdout | trim | length == 0
+
+    - name: Get free space in root volume group
+      ansible.builtin.command: vgs --noheadings --units m -o vg_free {{ extend_swap_to_root_vg }}
+      register: extend_swap_to_root_vg_free
+      changed_when: false
+      failed_when: false
+      when: extend_swap_to_root_is_lvm | default(false)
+
+    - name: Extend root logical volume with all free space in volume group
+      community.general.lvol:
+        vg: "{{ extend_swap_to_root_vg }}"
+        lv: "{{ extend_swap_to_root_lv }}"
+        size: +100%FREE
+        resizefs: true
+      register: extend_swap_to_root_lvextend
+      when:
+        - extend_swap_to_root_is_lvm | default(false)
+        - (extend_swap_to_root_vg_free.stdout | default('') | regex_search('[1-9]')) is not none
+
+    - name: Grow XFS filesystem on root logical volume
+      ansible.builtin.command: xfs_growfs {{ extend_swap_to_root_source.stdout }}
+      when:
+        - extend_swap_to_root_is_lvm | default(false)
+        - extend_swap_to_root_fstype.stdout | trim == 'xfs'
+        - extend_swap_to_root_lvextend is defined
+        - extend_swap_to_root_lvextend is changed
+      changed_when: true

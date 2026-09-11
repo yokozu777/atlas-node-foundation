@@ -1,0 +1,382 @@
+---
+# Phase 2: apply pkg_repos[+pkg_repos_extra] — one drop-in per name.
+# Wrong-OS / wrong-OL-major entries are skipped. Unknown names fail assert.
+# Effective list is _pkg_repos_effective (idempotent; does not mutate pkg_repos).
+
+- name: Resolve effective pkg_repos list
+  ansible.builtin.set_fact:
+    _pkg_repos_effective: "{{ (pkg_repos | default([])) + (pkg_repos_extra | default([])) }}"
+
+- name: Forbid cleanup_repositories with empty effective pkg_repos
+  ansible.builtin.assert:
+    that:
+      - >-
+        not (cleanup_repositories | default(false) | bool)
+        or ((_pkg_repos_effective | default([]) | length) > 0)
+    fail_msg: >-
+      cleanup_repositories=true with empty combined pkg_repos + pkg_repos_extra
+      would wipe apt/yum drop-ins and write nothing. Populate pkg_repos /
+      pkg_repos_extra or set cleanup_repositories=false.
+      See docs/pkg-repos-contract.md.
+
+- name: Validate effective pkg_repos schema
+  when: _pkg_repos_effective | default([]) | length > 0
+  block:
+    - name: Assert each effective pkg_repos item has name and uri
+      ansible.builtin.assert:
+        that:
+          - item.name is defined
+          - item.name | length > 0
+          - item.uri is defined
+          - item.uri | length > 0
+        fail_msg: >-
+          pkg_repos entry missing name/uri: {{ item | to_json }}.
+          See docs/pkg-repos-contract.md.
+      loop: "{{ _pkg_repos_effective }}"
+      loop_control:
+        label: "{{ item.name | default('?') }}"
+
+    - name: Assert effective pkg_repos names are unique
+      ansible.builtin.assert:
+        that:
+          - (_pkg_repos_effective | map(attribute='name') | list | length)
+            == (_pkg_repos_effective | map(attribute='name') | list | unique | list | length)
+        fail_msg: >-
+          pkg_repos names must be unique across combined
+          pkg_repos + pkg_repos_extra.
+
+    - name: Assert every effective pkg_repos name is a known catalog slug
+      ansible.builtin.assert:
+        that:
+          - (item.name | pkg_repo_resolve) is not none
+        fail_msg: >-
+          Unknown pkg_repos name '{{ item.name }}'.
+          Add it to docs/pkg-repos-catalog.yml or fix the leaf list.
+      loop: "{{ _pkg_repos_effective }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+- name: Prepare to remove repositories on Oracle Linux
+  ansible.builtin.find:
+    paths: "{{ pkg_repo_yum_repos_dir }}"
+  register: cleanup_repos
+  when:
+    - ansible_facts['distribution'] == 'OracleLinux'
+    - cleanup_repositories | default(false) | bool
+    - (_pkg_repos_effective | default([]) | length) > 0
+
+- name: Remove repositories on Oracle Linux
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ cleanup_repos.files | default([]) }}"
+  when:
+    - ansible_facts['distribution'] == 'OracleLinux'
+    - cleanup_repositories | default(false) | bool
+    - (_pkg_repos_effective | default([]) | length) > 0
+
+- name: Prepare to remove repositories on Ubuntu/Debian
+  ansible.builtin.find:
+    paths: "{{ pkg_repo_apt_sources_dir }}"
+  register: cleanup_repos
+  when:
+    - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+    - cleanup_repositories | default(false) | bool
+    - (_pkg_repos_effective | default([]) | length) > 0
+
+- name: Remove repositories on Ubuntu/Debian
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ cleanup_repos.files | default([]) }}"
+  when:
+    - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+    - cleanup_repositories | default(false) | bool
+    - (_pkg_repos_effective | default([]) | length) > 0
+
+- name: Remove Oracle bootstrap EPEL drop-in after managed repos apply
+  ansible.builtin.file:
+    path: "{{ oracle_bootstrap_epel_repo_file | default('/etc/yum.repos.d/atlas-bootstrap-OL-developer-EPEL.repo') }}"
+    state: absent
+  when:
+    - ansible_facts['distribution'] == 'OracleLinux'
+    - >-
+      (cleanup_repositories | default(false) | bool)
+      or (_pkg_repos_effective | default([]) | length > 0)
+
+- name: Remove legacy unprefixed APT drop-ins from older Nexus layouts
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/apt/sources.list.d/debian.sources
+    - /etc/apt/sources.list.d/ubuntu.sources
+    - /etc/apt/sources.list.d/pgdg.list
+  when:
+    - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+    - _pkg_repos_effective | default([]) | length > 0
+
+- name: Remove legacy unprefixed YUM drop-ins from older Nexus layouts
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/yum.repos.d/oracle9.repo
+    - /etc/yum.repos.d/oracle10.repo
+    - /etc/yum.repos.d/pgdg-redhat-all.repo
+  when:
+    - ansible_facts['distribution'] == 'OracleLinux'
+    - _pkg_repos_effective | default([]) | length > 0
+
+- name: Find legacy org-prefixed managed APT drop-ins
+  ansible.builtin.find:
+    paths: "{{ pkg_repo_apt_sources_dir }}"
+    patterns:
+      - "*-debian.sources"
+      - "*-ubuntu.sources"
+      - "*-pgdg.sources"
+  register: legacy_apt_dropins
+  when:
+    - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+    - _pkg_repos_effective | default([]) | length > 0
+
+- name: Remove legacy org-prefixed managed APT drop-ins
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ legacy_apt_dropins.files | default([]) }}"
+  when:
+    - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+    - _pkg_repos_effective | default([]) | length > 0
+
+- name: Find legacy org-prefixed managed YUM drop-ins
+  ansible.builtin.find:
+    paths: "{{ pkg_repo_yum_repos_dir }}"
+    patterns:
+      - "*-oracle9.repo"
+      - "*-oracle10.repo"
+      - "*-oracle9-k8s.repo"
+      - "*-oracle10-k8s.repo"
+      - "*-oracle-k8s.repo"
+      - "*-oracle-docker-public.repo"
+      - "*-pgdg.repo"
+      - "*-bootstrap-epel.repo"
+  register: legacy_yum_dropins
+  when:
+    - ansible_facts['distribution'] == 'OracleLinux'
+    - _pkg_repos_effective | default([]) | length > 0
+
+- name: Remove legacy org-prefixed managed YUM drop-ins
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ legacy_yum_dropins.files | default([]) }}"
+  when:
+    - ansible_facts['distribution'] == 'OracleLinux'
+    - _pkg_repos_effective | default([]) | length > 0
+
+- name: Enrich pkg_repos for this host
+  ansible.builtin.set_fact:
+    _pkg_repos_resolved: >-
+      {{
+        _pkg_repos_effective | default([])
+        | pkg_repo_enrich(
+            ansible_facts['distribution'],
+            ansible_facts['distribution_major_version']
+              | default(ansible_facts['distribution_version'] | default(''))
+          )
+      }}
+    _pkg_repos_active: >-
+      {{
+        _pkg_repos_effective | default([])
+        | pkg_repo_enrich(
+            ansible_facts['distribution'],
+            ansible_facts['distribution_major_version']
+              | default(ansible_facts['distribution_version'] | default(''))
+          )
+        | selectattr('enabled')
+        | selectattr('_applies')
+        | list
+      }}
+    _pkg_repos_disabled_applicable: >-
+      {{
+        _pkg_repos_effective | default([])
+        | pkg_repo_enrich(
+            ansible_facts['distribution'],
+            ansible_facts['distribution_major_version']
+              | default(ansible_facts['distribution_version'] | default(''))
+          )
+        | rejectattr('enabled')
+        | selectattr('_applies')
+        | list
+      }}
+
+- name: Remove drop-ins for disabled applicable pkg_repos
+  ansible.builtin.file:
+    path: >-
+      {{
+        (pkg_repo_apt_sources_dir ~ '/' ~ item.name ~ '.sources')
+        if item._meta.family == 'apt'
+        else (pkg_repo_yum_repos_dir ~ '/' ~ item.name ~ '.repo')
+      }}
+    state: absent
+  loop: "{{ _pkg_repos_disabled_applicable | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Ensure APT keyrings directory exists
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: "0755"
+  when:
+    - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+    - >-
+      (_pkg_repos_active | default([]) | pkg_repo_needs_keyring('docker'))
+      or (_pkg_repos_active | default([]) | pkg_repo_needs_keyring('k8s'))
+      or (_pkg_repos_active | default([]) | pkg_repo_needs_keyring('pgdg'))
+
+- name: Install PGDG apt keyring when pgdg-apt is active
+  when:
+    - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+    - _pkg_repos_active | default([]) | pkg_repo_needs_keyring('pgdg')
+  block:
+    - name: Download PGDG GPG key (ASCII armored)
+      ansible.builtin.get_url:
+        url: https://www.postgresql.org/media/keys/ACCC4CF8.asc
+        dest: /usr/share/keyrings/postgresql.asc
+        mode: "0644"
+
+    - name: Convert PGDG GPG key to deb822 keyring format
+      ansible.builtin.command:
+        cmd: gpg --dearmor --yes -o /usr/share/keyrings/postgresql.gpg /usr/share/keyrings/postgresql.asc
+      register: pgdg_key_dearmor
+      changed_when: pgdg_key_dearmor.rc == 0
+
+- name: Install Docker apt keyring when containerd repo is active
+  when:
+    - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+    - _pkg_repos_active | default([]) | pkg_repo_needs_keyring('docker')
+  block:
+    - name: Download Docker GPG key (Ubuntu)
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        mode: "0644"
+      when: ansible_facts['distribution'] == 'Ubuntu'
+
+    - name: Download Docker GPG key (Debian)
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/debian/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        mode: "0644"
+      when: ansible_facts['distribution'] == 'Debian'
+
+- name: Install Kubernetes apt keyring when k8s-ubuntu-* is active
+  when:
+    - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+    - _pkg_repos_active | default([]) | pkg_repo_needs_keyring('k8s')
+  block:
+    - name: Assert k8s_apt_repo_version is set for k8s apt keyring
+      ansible.builtin.assert:
+        that:
+          - k8s_apt_repo_version | default('') | length > 0
+        fail_msg: >-
+          Active k8s-ubuntu-* pkg_repos require k8s_apt_repo_version
+          (e.g. '1.36') to fetch the Release.key.
+
+    - name: Download Kubernetes APT Release.key
+      ansible.builtin.get_url:
+        url: "https://pkgs.k8s.io/core:/stable:/v{{ k8s_apt_repo_version }}/deb/Release.key"
+        dest: /etc/apt/keyrings/kubernetes-apt-keyring
+        mode: "0644"
+
+    - name: Convert Kubernetes APT key to GPG format
+      ansible.builtin.command:
+        cmd: >-
+          gpg --dearmor --yes
+          -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+          /etc/apt/keyrings/kubernetes-apt-keyring
+      args:
+        creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+- name: Deploy APT pkg_repos drop-ins
+  ansible.builtin.template:
+    src: apt-repo.sources.j2
+    dest: "{{ pkg_repo_apt_sources_dir }}/{{ item.name }}.sources"
+    mode: "0644"
+  loop: "{{ _pkg_repos_active | default([]) | pkg_repo_by_family('apt') }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+
+- name: Deploy YUM pkg_repos drop-ins
+  ansible.builtin.template:
+    src: yum-repo.repo.j2
+    dest: "{{ pkg_repo_yum_repos_dir }}/{{ item.name }}.repo"
+    mode: "0644"
+  loop: "{{ _pkg_repos_active | default([]) | pkg_repo_by_family('yum') }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: ansible_facts['distribution'] == 'OracleLinux'
+
+- name: Assert applicable apt pkg_repos exist when cleanup wiped sources
+  ansible.builtin.assert:
+    that:
+      - (_pkg_repos_active | default([]) | pkg_repo_by_family('apt') | length) > 0
+    fail_msg: >-
+      cleanup_repositories wiped APT sources but no applicable apt pkg_repos
+      are enabled for {{ ansible_facts['distribution'] }}. Add OS-matching
+      entries to combined pkg_repos + pkg_repos_extra
+      (_pkg_repos_effective; see docs/pkg-repos-catalog.md).
+  when:
+    - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+    - cleanup_repositories | default(false) | bool
+    - _pkg_repos_effective | default([]) | length > 0
+    - >-
+      (
+        _pkg_repos_resolved | default([])
+        | selectattr('enabled')
+        | list
+        | pkg_repo_by_family('apt')
+        | length
+      ) > 0
+
+- name: Assert applicable yum pkg_repos exist when cleanup wiped repos
+  ansible.builtin.assert:
+    that:
+      - (_pkg_repos_active | default([]) | pkg_repo_by_family('yum') | length) > 0
+    fail_msg: >-
+      cleanup_repositories wiped YUM repos but no applicable yum pkg_repos
+      are enabled for OracleLinux {{ ansible_facts['distribution_major_version'] }}.
+      Add OL-matching entries to combined pkg_repos + pkg_repos_extra
+      (_pkg_repos_effective; see docs/pkg-repos-catalog.md).
+  when:
+    - ansible_facts['distribution'] == 'OracleLinux'
+    - cleanup_repositories | default(false) | bool
+    - _pkg_repos_effective | default([]) | length > 0
+    - >-
+      (
+        _pkg_repos_resolved | default([])
+        | selectattr('enabled')
+        | list
+        | pkg_repo_by_family('yum')
+        | length
+      ) > 0
+
+- name: Deploy APT Acquire-by-Hash drop-in
+  ansible.builtin.template:
+    src: apt-acquire-by-hash.conf.j2
+    dest: "{{ pkg_repo_apt_acquire_by_hash_conf }}"
+    mode: "0644"
+  when:
+    - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+    - pkg_repo_apt_acquire_by_hash | default(false) | bool
+
+- name: Remove APT Acquire-by-Hash drop-in when disabled
+  ansible.builtin.file:
+    path: "{{ pkg_repo_apt_acquire_by_hash_conf }}"
+    state: absent
+  when:
+    - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+    - not (pkg_repo_apt_acquire_by_hash | default(false) | bool)

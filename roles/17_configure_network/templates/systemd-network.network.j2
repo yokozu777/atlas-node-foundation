@@ -1,0 +1,26 @@
+# Ansible managed: systemd-networkd static configuration
+[Match]
+{% if item.mac is defined and item.mac | length > 0 %}
+MACAddress={{ item.mac }}
+{% else %}
+Name={{ item.name }}
+{% endif %}
+
+[Link]
+ActivationPolicy=always-up
+
+[Network]
+ConfigureWithoutCarrier=yes
+Address={{ item.address }}
+{% if item.gateway is defined and item.gateway | length > 0 %}
+Gateway={{ item.gateway }}
+{% endif %}
+{% set iface_dns = item.dns | default([]) %}
+{% set resolved_dns = iface_dns if iface_dns | length > 0 else dns_servers | default([]) %}
+{% for dns in resolved_dns %}
+DNS={{ dns }}
+{% endfor %}
+{% if disable_ipv6 | default(false) | bool %}
+LinkLocalAddressing=no
+IPv6AcceptRA=no
+{% endif %}

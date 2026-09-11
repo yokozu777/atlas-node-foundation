@@ -1,0 +1,17 @@
+---
+# CI / local contributor lint. Raise locally with:
+#   ansible-lint --profile basic
+profile: min
+
+exclude_paths:
+  - .cache/
+  - .ansible/
+  - workspace/
+  - tests/__pycache__/
+  - .git/
+
+# Cross-role contracts (cluster_*, pkg_repo_*, admin_user, …) are intentional.
+# Do not enable var-naming[no-role-prefix] until a coordinated rename.
+skip_list: []
+
+verbosity: 1

@@ -1,0 +1,16 @@
+# Inventory example for ./run.sh.
+# Copy to inventory.yml and edit — inventory.yml is gitignored.
+#
+# Default host pattern: all (group_vars / run.sh). Override if needed:
+#   NODE_FOUNDATION_INIT_HOSTS=nodes ./run.sh
+
+all:
+  children:
+    nodes:
+      hosts:
+        example-host:
+          ansible_host: 192.168.1.100
+          # Optional per-host knobs (also host_vars/example-host.yml):
+          hostname: example-host.example.com
+          # ansible_user: localuser
+          # ansible_port: 22

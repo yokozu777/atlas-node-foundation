@@ -1,0 +1,25 @@
+# Ansible managed: systemd-journald configuration
+[Journal]
+{% if journald_disabled | default(false) | bool %}
+Storage=none
+ForwardToSyslog=no
+ForwardToKMsg=no
+ForwardToConsole=no
+ForwardToWall=no
+MaxLevelStore=emerg
+MaxLevelSyslog=emerg
+RateLimitIntervalSec=0
+{% else %}
+Storage=persistent
+Compress=yes
+Seal=yes
+SystemMaxUse={{ journald_max_disk_use }}
+SystemKeepFree={{ journald_system_keep_free }}
+{% if journald_max_age | default('') | trim | length > 0 %}
+MaxRetentionSec={{ journald_max_age | trim }}
+{% endif %}
+MaxLevelStore={{ journald_max_level }}
+ForwardToSyslog=no
+ForwardToKMsg=no
+RateLimitBurst=10000
+{% endif %}

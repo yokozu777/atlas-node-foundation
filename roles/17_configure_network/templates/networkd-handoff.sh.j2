@@ -1,0 +1,39 @@
+#!/bin/bash
+# Ansible managed: emergency NetworkManager recovery after failed handoff
+set -euo pipefail
+
+IFACE="{{ effective_network_interfaces[0].name }}"
+ADDR="{{ effective_network_interfaces[0].address }}"
+GW="{{ effective_network_interfaces[0].gateway | default('') }}"
+MARKER="/run/ansible-networkd-handoff.ok"
+LOG_FILE="/var/log/ansible-networkd-handoff.log"
+LOG_TAG="ansible-networkd-handoff"
+
+log() {
+  logger -t "${LOG_TAG}" "$*"
+  echo "$(date -Iseconds) $*" >> "${LOG_FILE}"
+}
+
+apply_kernel_ipv4() {
+  ip link set "${IFACE}" up 2>/dev/null || true
+  ip addr replace "${ADDR}" dev "${IFACE}" 2>/dev/null || true
+  if [[ -n "${GW}" ]]; then
+    ip route replace default via "${GW}" dev "${IFACE}" metric 50 2>/dev/null || true
+  fi
+}
+
+if [[ "${1:-}" != "--recover" ]]; then
+  echo "This script is emergency-only. Handoff is performed by Ansible tasks." >&2
+  exit 1
+fi
+
+log "recover: pinning IPv4 and restarting NetworkManager"
+rm -f "${MARKER}"
+apply_kernel_ipv4
+if command -v nmcli >/dev/null 2>&1; then
+  nmcli device set "${IFACE}" managed yes 2>/dev/null || true
+  nmcli device connect "${IFACE}" 2>/dev/null || true
+fi
+systemctl start NetworkManager 2>/dev/null || true
+apply_kernel_ipv4
+exit 0

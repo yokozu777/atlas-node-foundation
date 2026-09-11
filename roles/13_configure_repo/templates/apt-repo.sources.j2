@@ -1,0 +1,60 @@
+{# Deb822 drop-in for one pkg_repos entry. item.uri is written verbatim. #}
+{% set kind = item._meta.kind %}
+{% set release = ansible_facts['distribution_release'] %}
+{% if kind == 'debian-main' %}
+Types: deb deb-src
+URIs: {{ item.uri }}
+Suites: {{ release }} {{ release }}-updates
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+
+{% elif kind == 'debian-security' %}
+Types: deb deb-src
+URIs: {{ item.uri }}
+Suites: {{ release }}-security
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+
+{% elif kind == 'debian-non-free' %}
+Types: deb
+URIs: {{ item.uri }}
+Suites: {{ release }} {{ release }}-updates
+Components: contrib non-free non-free-firmware
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+
+{% elif kind == 'ubuntu' %}
+Types: deb
+URIs: {{ item.uri }}
+Suites: {{ release }} {{ release }}-updates {{ release }}-backports
+Components: main universe restricted multiverse
+Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+
+Types: deb
+URIs: {{ item.uri }}
+Suites: {{ release }}-security
+Components: main universe restricted multiverse
+Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+
+{% elif kind == 'pgdg-apt' %}
+Types: deb
+URIs: {{ item.uri }}
+Suites: {{ release }}-pgdg
+Components: main
+Signed-By: /usr/share/keyrings/postgresql.gpg
+
+{% elif kind == 'docker-deb' %}
+Types: deb
+URIs: {{ item.uri }}
+Suites: {{ release }}
+Components: stable
+Signed-By: /etc/apt/keyrings/docker.asc
+
+{% elif kind == 'k8s-deb' %}
+Types: deb
+URIs: {{ item.uri }}
+Suites: /
+Signed-By: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+{% else %}
+{# unknown apt kind — should be filtered before template #}
+{% endif %}

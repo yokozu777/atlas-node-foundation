@@ -1,0 +1,73 @@
+---
+- name: "Set short name for {{ init_data_disk }}"
+  ansible.builtin.set_fact:
+    init_data_disk_short_name: "{{ init_data_disk | regex_replace('^/dev/', '') }}"
+
+- name: "Check GPT partition mismatch on {{ init_data_disk }}"
+  ansible.builtin.shell: "fdisk -l {{ init_data_disk }} 2>&1 | grep -q 'GPT PMBR size mismatch'"
+  register: init_data_disk_gpt_mismatch
+  changed_when: false
+  failed_when: false
+
+- name: "Fix GPT backup table on {{ init_data_disk }}"
+  ansible.builtin.command: sgdisk -e {{ init_data_disk }}
+  when: init_data_disk_gpt_mismatch.rc == 0
+
+- name: "Reload partition table on {{ init_data_disk }}"
+  ansible.builtin.command: partprobe {{ init_data_disk }}
+  changed_when: false
+
+- name: "Get partition layout on {{ init_data_disk }}"
+  community.general.parted:
+    device: "{{ init_data_disk }}"
+    unit: MiB
+  register: init_data_disk_parted_info
+
+- name: "Wipe partition table on raw data disk {{ init_data_disk }}"
+  ansible.builtin.command: sgdisk --zap-all {{ init_data_disk }}
+  when:
+    - prepare_data_disk_mode | default('raw') == 'raw'
+    - prepare_data_disk_wipe_existing_partitions | default(true) | bool
+    - init_data_disk_parted_info.partitions | length > 0
+
+- name: "Reload partition table after wiping {{ init_data_disk }}"
+  ansible.builtin.command: partprobe {{ init_data_disk }}
+  when:
+    - prepare_data_disk_mode | default('raw') == 'raw'
+    - prepare_data_disk_wipe_existing_partitions | default(true) | bool
+    - init_data_disk_parted_info.partitions | length > 0
+  changed_when: false
+
+- name: "Refresh partition layout on {{ init_data_disk }}"
+  community.general.parted:
+    device: "{{ init_data_disk }}"
+    unit: MiB
+  register: init_data_disk_parted_info
+  when: prepare_data_disk_mode | default('raw') in ['xfs', 'ext4']
+
+- name: "Create GPT label and single partition on {{ init_data_disk }}"
+  community.general.parted:
+    device: "{{ init_data_disk }}"
+    label: gpt
+    number: 1
+    part_type: primary
+    state: present
+    part_start: 1MiB
+    part_end: 100%
+    resize: true
+  when:
+    - prepare_data_disk_mode | default('raw') in ['xfs', 'ext4']
+    - init_data_disk_parted_info.partitions | length == 0
+
+- name: "Reload partition table after preparing {{ init_data_disk }}"
+  ansible.builtin.command: partprobe {{ init_data_disk }}
+  when:
+    - prepare_data_disk_mode | default('raw') in ['xfs', 'ext4']
+    - init_data_disk_parted_info.partitions | length == 0
+  changed_when: false
+
+- name: "Format data partition on {{ init_data_disk }}"
+  community.general.filesystem:
+    fstype: "{{ prepare_data_disk_mode }}"
+    dev: "{{ init_data_disk }}1"
+  when: prepare_data_disk_mode | default('raw') in ['xfs', 'ext4']

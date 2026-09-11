@@ -1,0 +1,31 @@
+---
+# Phase 2 client contract: pkg_repo_base + pkg_repos[{name,enabled,uri}]
+# See docs/pkg-repos-contract.md
+
+pkg_repo_base: "https://nexus.example.com/repository"
+
+# Base package repos (empty = write nothing unless pkg_repos_extra fills in).
+# Wrong-OS entries are skipped. Example:
+#   pkg_repos:
+#     - name: ubuntu
+#       enabled: true
+#       uri: "{{ pkg_repo_base }}/ubuntu"
+pkg_repos: []
+
+# Stack/site extras appended to pkg_repos at role start (same schema).
+# Use when env default holds OS base and the leaf only adds pgdg/k8s/docker/…
+pkg_repos_extra: []
+
+# Wipe /etc/apt/sources.list.d or /etc/yum.repos.d before apply
+cleanup_repositories: false
+
+# PostgreSQL major version for pgdg-yum baseurl path under uri
+pgsql_version: "18"
+
+# APT Acquire::By-Hash drop-in (typical for nginx pkg-repo mirrors)
+pkg_repo_apt_acquire_by_hash: false
+pkg_repo_apt_acquire_by_hash_conf: /etc/apt/apt.conf.d/99-pkg-repo-acquire-by-hash
+
+# Dest path helpers (derived only from name — no org prefix)
+pkg_repo_apt_sources_dir: /etc/apt/sources.list.d
+pkg_repo_yum_repos_dir: /etc/yum.repos.d

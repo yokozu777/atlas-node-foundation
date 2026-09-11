@@ -1,0 +1,3 @@
+# Role 14_install_software default variables (override in group_vars/all/atlas-node-foundation.yml or host_vars)
+install_packages: ""  # Additional packages to install (space-separated string or list)
+uninstall_packages: ""  # Packages to remove (space-separated string or list)

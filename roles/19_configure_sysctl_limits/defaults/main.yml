@@ -1,0 +1,21 @@
+# Role 19_configure_sysctl_limits default variables (override in group_vars/all/atlas-node-foundation.yml or host_vars)
+copy_system_files: true  # Copy system files (e.g. sysctl.conf)
+configure_system_limits: true  # Configure system limits (file descriptors, threads)
+
+sysctl_kernel_modules:
+  - br_netfilter
+  - nf_conntrack
+
+sysctl_verify_critical:
+  - { key: vm.swappiness, value: '1' }
+  - { key: vm.max_map_count, value: '2097152' }
+  - { key: fs.file-max, value: '2097152' }
+  - { key: net.ipv4.ip_forward, value: '1' }
+  - { key: net.ipv6.conf.all.disable_ipv6, value: '1' }
+  - { key: net.ipv6.conf.default.disable_ipv6, value: '1' }
+  - { key: net.core.somaxconn, value: '4096' }
+  - { key: net.ipv4.conf.all.rp_filter, value: '0' }
+  - { key: net.ipv4.conf.default.rp_filter, value: '0' }
+  - { key: net.bridge.bridge-nf-call-iptables, value: '1' }
+  - { key: net.bridge.bridge-nf-call-ip6tables, value: '1' }
+  - { key: net.netfilter.nf_conntrack_max, value: '1000000' }

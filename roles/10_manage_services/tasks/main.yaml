@@ -1,0 +1,9 @@
+---
+- name: Manage specified services
+  ansible.builtin.systemd:
+    name: "{{ item.name }}"
+    state: "{{ 'stopped' if item.disable else 'started' }}"
+    enabled: "{{ 'no' if item.disable else 'yes' }}"
+  loop: "{{ services_to_disable | default([]) }}"
+  when: services_to_disable is defined
+

@@ -1,0 +1,48 @@
+---
+- name: Install required packages on Oracle Linux
+  ansible.builtin.dnf:
+    name: >-
+      {{
+        (['chrony', 'parted', 'rsync', 'nano', 'gdisk', 'iputils']) +
+        (install_packages.split() if install_packages | default('') | length > 0 else [])
+      }}
+    state: present
+    install_weak_deps: no
+  when: ansible_facts['distribution'] == 'OracleLinux'
+
+- name: Install required packages on Ubuntu/Debian
+  ansible.builtin.apt:
+    name: >-
+      {{
+        (['chrony', 'parted', 'rsync', 'lvm2', 'gpg', 'nano', 'iputils-ping']) +
+        (install_packages.split() if install_packages | default('') | length > 0 else [])
+      }}
+    state: present
+    update_cache: true
+    install_recommends: no
+  when: ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+
+- name: Uninstall packages on Oracle Linux
+  ansible.builtin.dnf:
+    name: >-
+      {{
+        (uninstall_packages.split() if uninstall_packages | default('') | length > 0 else [])
+      }}
+    state: absent
+  when:
+    - ansible_facts['distribution'] == 'OracleLinux'
+    - uninstall_packages is defined
+    - uninstall_packages | length > 0
+
+- name: Uninstall packages on Ubuntu/Debian
+  ansible.builtin.apt:
+    name: >-
+      {{
+        (uninstall_packages.split() if uninstall_packages | default('') | length > 0 else [])
+      }}
+    state: absent
+    purge: true
+  when:
+    - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+    - uninstall_packages is defined
+    - uninstall_packages | length > 0

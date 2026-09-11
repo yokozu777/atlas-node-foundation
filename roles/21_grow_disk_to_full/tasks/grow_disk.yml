@@ -1,0 +1,230 @@
+---
+- name: "Set disk short name for {{ grow_disk_target.disk }}"
+  ansible.builtin.set_fact:
+    grow_disk_short_name: "{{ grow_disk_target.disk | regex_replace('^/dev/', '') }}"
+
+- name: "Check if {{ grow_disk_target.disk }} exists"
+  ansible.builtin.stat:
+    path: "{{ grow_disk_target.disk }}"
+  register: grow_disk_stat
+
+- name: "Get partition info for {{ grow_disk_target.disk }}"
+  community.general.parted:
+    device: "{{ grow_disk_target.disk }}"
+    unit: MiB
+  register: grow_disk_parted_info
+  when: grow_disk_stat.stat.exists
+
+- name: "Check GPT partition mismatch on {{ grow_disk_target.disk }}"
+  ansible.builtin.shell: "fdisk -l {{ grow_disk_target.disk }} 2>&1 | grep -q 'GPT PMBR size mismatch'"
+  register: grow_disk_gpt_mismatch
+  changed_when: false
+  failed_when: false
+  when: grow_disk_stat.stat.exists
+
+- name: "Fix GPT backup table on {{ grow_disk_target.disk }}"
+  ansible.builtin.command: sgdisk -e {{ grow_disk_target.disk }}
+  when:
+    - grow_disk_stat.stat.exists
+    - grow_disk_gpt_mismatch.rc == 0
+
+- name: "Reload partition table for {{ grow_disk_target.disk }}"
+  ansible.builtin.command: partprobe {{ grow_disk_target.disk }}
+  changed_when: false
+  when: grow_disk_stat.stat.exists
+
+- name: "Refresh partition facts for {{ grow_disk_target.disk }}"
+  ansible.builtin.setup:
+    gather_subset:
+      - hardware
+  when: grow_disk_stat.stat.exists
+
+- name: "Calculate free space on {{ grow_disk_target.disk }}"
+  ansible.builtin.set_fact:
+    grow_disk_last_partition_end: >-
+      {{
+        grow_disk_parted_info.partitions
+        | map(attribute='end')
+        | map('int')
+        | max
+      }}
+    grow_disk_size_mib: >-
+      {{
+        (
+          ansible_facts['devices'][grow_disk_short_name].size
+          | regex_replace(' GB', '')
+          | float * 1024
+        ) | int
+      }}
+  when:
+    - grow_disk_stat.stat.exists
+    - grow_disk_parted_info.partitions | length > 0
+    - grow_disk_short_name in ansible_facts['devices']
+
+- name: "Find unallocated partitions already present on {{ grow_disk_target.disk }}"
+  ansible.builtin.shell: |
+    set -euo pipefail
+    python3 - <<'PY'
+    import json
+    import subprocess
+
+    disk = {{ grow_disk_target.disk | to_json }}
+    known_pvs = set({{ grow_disk_target.pvs | to_json }})
+    disk_name = disk.rsplit("/", 1)[-1]
+
+    pvs_out = subprocess.check_output(["pvs", "--noheadings", "-o", "pv_name"], text=True)
+    existing_pvs = {line.strip() for line in pvs_out.splitlines() if line.strip()}
+
+    pv_partition_numbers = []
+    for pv in known_pvs:
+        if pv.startswith(disk):
+            suffix = pv[len(disk):]
+            if suffix.isdigit():
+                pv_partition_numbers.append(int(suffix))
+    min_new_partition = max(pv_partition_numbers) if pv_partition_numbers else 0
+
+    candidates = []
+    lsblk = subprocess.check_output(
+        ["lsblk", "-ln", "-o", "NAME,TYPE,FSTYPE,MOUNTPOINT,PKNAME"], text=True
+    )
+    for line in lsblk.splitlines():
+        parts = line.split(maxsplit=4)
+        if len(parts) < 4:
+            continue
+        name, typ, fstype, mountpoint = parts[0], parts[1], parts[2], parts[3]
+        pkname = parts[4] if len(parts) > 4 else ""
+        if pkname != disk_name or typ != "part":
+            continue
+
+        path = f"/dev/{name}"
+        if path in known_pvs or path in existing_pvs:
+            continue
+        if mountpoint not in ("", "-"):
+            continue
+        if fstype in ("vfat", "xfs", "ext4", "ext3", "btrfs", "swap"):
+            continue
+
+        part_num = int(name.removeprefix(disk_name))
+        if part_num <= min_new_partition and fstype != "LVM2_member":
+            continue
+
+        blkid = subprocess.run(
+            ["blkid", "-o", "value", "-s", "TYPE", path],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        blkid_type = blkid.stdout.strip()
+        if blkid_type in ("vfat", "xfs", "ext4", "ext3", "btrfs", "swap"):
+            continue
+        if part_num > min_new_partition or blkid_type == "LVM2_member" or blkid_type == "":
+            candidates.append(path)
+
+    print(json.dumps(sorted(set(candidates))))
+    PY
+  args:
+    executable: /bin/bash
+  register: grow_disk_new_pv_candidates
+  changed_when: false
+  when:
+    - grow_disk_stat.stat.exists
+    - grow_disk_last_partition_end is defined
+    - grow_disk_size_mib is defined
+
+- name: "Add LVM partition to {{ grow_disk_target.disk }}"
+  community.general.parted:
+    device: "{{ grow_disk_target.disk }}"
+    label: gpt
+    number: "{{ grow_disk_new_partition_number }}"
+    part_type: primary
+    flags: [lvm]
+    state: present
+    part_start: "{{ (grow_disk_last_partition_end | int + 1) ~ 'MiB' }}"
+    part_end: "100%"
+    resize: true
+  vars:
+    grow_disk_new_partition_number: >-
+      {{
+        (
+          ansible_facts['devices'][grow_disk_short_name].partitions.keys()
+          | map('regex_replace', '^' ~ grow_disk_short_name, '')
+          | map('int')
+          | max
+          + 1
+        )
+      }}
+  when:
+    - grow_disk_stat.stat.exists
+    - grow_disk_last_partition_end is defined
+    - grow_disk_size_mib is defined
+    - (grow_disk_last_partition_end | int + 1) < (grow_disk_size_mib | int)
+
+- name: "Reload partition table after creating partition on {{ grow_disk_target.disk }}"
+  ansible.builtin.command: partprobe {{ grow_disk_target.disk }}
+  when:
+    - grow_disk_stat.stat.exists
+    - grow_disk_last_partition_end is defined
+    - grow_disk_size_mib is defined
+    - (grow_disk_last_partition_end | int + 1) < (grow_disk_size_mib | int)
+
+- name: "Refresh partition facts after grow on {{ grow_disk_target.disk }}"
+  ansible.builtin.setup:
+    gather_subset:
+      - hardware
+  when:
+    - grow_disk_stat.stat.exists
+    - grow_disk_last_partition_end is defined
+    - grow_disk_size_mib is defined
+    - (grow_disk_last_partition_end | int + 1) < (grow_disk_size_mib | int)
+
+- name: "Discover new partition path on {{ grow_disk_target.disk }}"
+  ansible.builtin.set_fact:
+    grow_disk_new_partition: >-
+      /dev/{{ grow_disk_short_name }}{{
+        ansible_facts['devices'][grow_disk_short_name].partitions.keys()
+        | map('regex_replace', '^' ~ grow_disk_short_name, '')
+        | map('int')
+        | max
+      }}
+  when:
+    - grow_disk_stat.stat.exists
+    - grow_disk_short_name in ansible_facts['devices']
+    - ansible_facts['devices'][grow_disk_short_name].partitions | length > 0
+
+- name: "Build list of physical volumes to add to {{ grow_disk_vg }}"
+  ansible.builtin.set_fact:
+    grow_disk_pvs_to_add: >-
+      {{
+        (
+          (grow_disk_new_pv_candidates.stdout | default('[]') | from_json)
+          + ([grow_disk_new_partition] if (
+              grow_disk_new_partition is defined
+              and grow_disk_new_partition not in grow_disk_target.pvs
+              and grow_disk_new_partition not in (grow_disk_new_pv_candidates.stdout | default('[]') | from_json)
+              and (grow_disk_last_partition_end | default(0) | int + 1) < (grow_disk_size_mib | default(0) | int)
+            ) else [])
+        )
+        | unique
+      }}
+  when:
+    - grow_disk_stat.stat.exists
+    - grow_disk_new_pv_candidates is defined
+
+- name: "Create physical volume on {{ grow_disk_target.disk }}"
+  ansible.builtin.command: pvcreate -y {{ item }}
+  loop: "{{ grow_disk_pvs_to_add | default([]) }}"
+  when:
+    - grow_disk_pvs_to_add is defined
+    - grow_disk_pvs_to_add | length > 0
+  register: grow_disk_pvcreate
+  changed_when: grow_disk_pvcreate.rc == 0
+  failed_when: grow_disk_pvcreate.rc != 0
+
+- name: "Extend volume group {{ grow_disk_vg }} on {{ grow_disk_target.disk }}"
+  community.general.lvg:
+    vg: "{{ grow_disk_vg }}"
+    pvs: "{{ grow_disk_target.pvs + (grow_disk_pvs_to_add | default([])) }}"
+    pvresize: true
+  when:
+    - grow_disk_pvs_to_add is defined
+    - grow_disk_pvs_to_add | length > 0

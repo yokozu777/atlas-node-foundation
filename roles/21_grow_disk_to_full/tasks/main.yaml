@@ -1,0 +1,105 @@
+---
+- name: Grow system disk to full available size
+  when: grow_disk_to_full | default(false) | bool
+  block:
+    - name: Discover root filesystem device
+      ansible.builtin.command: findmnt -n -o SOURCE /
+      register: grow_disk_root_source
+      changed_when: false
+
+    - name: Discover root LVM volume group
+      ansible.builtin.shell: |
+        set -euo pipefail
+        lvs --noheadings -o vg_name {{ grow_disk_root_source.stdout | quote }}
+      args:
+        executable: /bin/bash
+      register: grow_disk_root_lvm
+      changed_when: false
+      failed_when: false
+
+    - name: Set root is not on LVM
+      ansible.builtin.set_fact:
+        grow_disk_is_lvm: false
+      when: grow_disk_root_lvm.rc != 0 or grow_disk_root_lvm.stdout | trim | length == 0
+
+    - name: Discover disks and physical volumes for root volume group
+      ansible.builtin.shell: |
+        set -euo pipefail
+        python3 - <<'PY'
+        import json
+        import subprocess
+
+        root_src = subprocess.check_output(
+            ["findmnt", "-n", "-o", "SOURCE", "/"], text=True
+        ).strip()
+        try:
+            vg = subprocess.check_output(
+                ["lvs", "--noheadings", "-o", "vg_name", root_src], text=True
+            ).split()[0]
+        except (subprocess.CalledProcessError, IndexError):
+            print(json.dumps({"vg": "", "disks": []}))
+            raise SystemExit(0)
+
+        disks = {}
+        pvs_out = subprocess.check_output(
+            ["pvs", "--noheadings", "-o", "pv_name,vg_name", "--separator", "|"],
+            text=True,
+        )
+        for line in pvs_out.splitlines():
+            parts = [part.strip() for part in line.split("|", 1)]
+            if len(parts) != 2 or parts[1] != vg:
+                continue
+            pv = parts[0]
+            pkname = subprocess.check_output(
+                ["lsblk", "-ndo", "PKNAME", pv], text=True
+            ).strip()
+            if not pkname:
+                continue
+            disk = f"/dev/{pkname}"
+            entry = disks.setdefault(disk, {"pvs": [], "vg": vg})
+            entry["pvs"].append(pv)
+
+        print(json.dumps({"vg": vg, "disks": [{"disk": disk, **data} for disk, data in disks.items()]}))
+        PY
+      args:
+        executable: /bin/bash
+      register: grow_disk_layout
+      changed_when: false
+      when: grow_disk_root_lvm.rc == 0 and grow_disk_root_lvm.stdout | trim | length > 0
+
+    - name: Set discovered LVM layout facts
+      ansible.builtin.set_fact:
+        grow_disk_is_lvm: true
+        grow_disk_vg: "{{ (grow_disk_layout.stdout | from_json).vg }}"
+        grow_disk_targets: "{{ (grow_disk_layout.stdout | from_json).disks }}"
+      when:
+        - grow_disk_layout is defined
+        - grow_disk_layout.stdout | default('') | trim | length > 0
+        - ((grow_disk_layout.stdout | from_json).disks | length) > 0
+
+    - name: Set LVM root without growable disk layout
+      ansible.builtin.set_fact:
+        grow_disk_is_lvm: true
+        grow_disk_targets: []
+      when:
+        - grow_disk_root_lvm.rc == 0
+        - grow_disk_root_lvm.stdout | trim | length > 0
+        - not (
+            grow_disk_layout is defined
+            and grow_disk_layout.stdout | default('') | trim | length > 0
+            and ((grow_disk_layout.stdout | from_json).disks | length) > 0
+          )
+
+    - name: Gather hardware-related facts
+      ansible.builtin.setup:
+        gather_subset:
+          - hardware
+      when: grow_disk_is_lvm | default(false)
+
+    - name: Grow each system disk with unallocated space
+      ansible.builtin.include_tasks: grow_disk.yml
+      loop: "{{ grow_disk_targets | default([]) }}"
+      loop_control:
+        loop_var: grow_disk_target
+        label: "{{ grow_disk_target.disk }}"
+      when: grow_disk_is_lvm | default(false)

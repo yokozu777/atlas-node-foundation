@@ -1,0 +1,112 @@
+---
+- name: Configure journald and baseline logrotate
+  when: configure_journald | default(true) | bool
+  block:
+    - name: Gather OS distribution facts
+      ansible.builtin.setup:
+        gather_subset:
+          - min
+        filter: ansible_distribution
+
+    - name: Validate journald log level
+      ansible.builtin.assert:
+        that:
+          - journald_max_level | lower in ['emerg', 'alert', 'crit', 'err', 'warning', 'notice', 'info', 'debug']
+        fail_msg: >-
+          journald_max_level must be one of:
+          emerg, alert, crit, err, warning, notice, info, debug
+      when: not (journald_disabled | default(false) | bool)
+
+    - name: Install logrotate on Oracle Linux
+      ansible.builtin.dnf:
+        name: logrotate
+        state: present
+      when:
+        - ansible_facts['distribution'] == 'OracleLinux'
+        - not (journald_disabled | default(false) | bool)
+
+    - name: Install logrotate on Ubuntu and Debian
+      ansible.builtin.apt:
+        name: logrotate
+        state: present
+        update_cache: true
+      when:
+        - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+        - not (journald_disabled | default(false) | bool)
+
+    - name: Ensure persistent journal directory exists
+      ansible.builtin.file:
+        path: /var/log/journal
+        state: directory
+        owner: root
+        group: systemd-journal
+        mode: '2755'
+      when: not (journald_disabled | default(false) | bool)
+
+    - name: Ensure systemd-journald drop-in directory exists
+      ansible.builtin.file:
+        path: /etc/systemd/journald.conf.d
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Deploy systemd-journald configuration
+      ansible.builtin.template:
+        src: journald.conf.j2
+        dest: /etc/systemd/journald.conf.d/99-ansible-journald.conf
+        owner: root
+        group: root
+        mode: '0644'
+      register: journald_config
+
+    - name: Deploy baseline logrotate configuration
+      ansible.builtin.template:
+        src: logrotate-ansible-base.j2
+        dest: /etc/logrotate.d/ansible-base
+        owner: root
+        group: root
+        mode: '0644'
+      when: not (journald_disabled | default(false) | bool)
+
+    - name: Remove baseline logrotate configuration when journald is disabled
+      ansible.builtin.file:
+        path: /etc/logrotate.d/ansible-base
+        state: absent
+      when: journald_disabled | default(false) | bool
+
+    - name: Restart systemd-journald
+      ansible.builtin.systemd:
+        name: systemd-journald
+        state: restarted
+        daemon_reload: true
+      when: journald_config is changed
+
+    - name: Purge persisted journal data when logging is disabled
+      ansible.builtin.command: journalctl --vacuum-size=1
+      register: journald_vacuum
+      changed_when: "'Vacuuming done' in journald_vacuum.stdout or 'Deleted' in journald_vacuum.stdout"
+      failed_when: false
+      when: journald_disabled | default(false) | bool
+
+    - name: Verify systemd-journald is active
+      ansible.builtin.command: systemctl is-active systemd-journald
+      register: journald_active_check
+      changed_when: false
+      failed_when: journald_active_check.stdout | trim != 'active'
+
+    - name: Read journal disk usage
+      ansible.builtin.command: journalctl --disk-usage
+      register: journald_disk_usage
+      changed_when: false
+      when: not (journald_disabled | default(false) | bool)
+
+    - name: Show journal disk usage
+      ansible.builtin.debug:
+        msg: "{{ journald_disk_usage.stdout | trim }}"
+      when: not (journald_disabled | default(false) | bool)
+
+    - name: Confirm journald logging is disabled
+      ansible.builtin.debug:
+        msg: systemd-journald is active with Storage=none (persistent logging disabled)
+      when: journald_disabled | default(false) | bool

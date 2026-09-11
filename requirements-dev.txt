@@ -1,0 +1,7 @@
+# Dev / CI tools (optional). Runtime Galaxy collections: requirements.yml
+#
+# Controller Ansible itself is not pinned here (use distro packages or a venv with
+# Ansible 2.14+ / ansible-core compatible with your OS). Example:
+#   python3 -m pip install -r requirements-dev.txt
+#   ansible-galaxy collection install -r requirements.yml
+ansible-lint>=25.0.0

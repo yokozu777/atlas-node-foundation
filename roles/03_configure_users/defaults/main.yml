@@ -1,0 +1,7 @@
+# Role 03_configure_users default variables (override in group_vars/all/atlas-node-foundation.yml or host_vars)
+system_user: localuser  # System user name (required)
+change_root_password: false  # Change root password
+new_root_password: "CHANGEME"  # New root password (use ansible-vault in production)
+enable_system_user_password: false  # Set password for system_user
+system_user_password: "CHANGEME"  # Password for system_user (use ansible-vault in production)
+pub_keys_folder: pub_keys  # Folder with *.pub keys; relative to project root (inventory_dir), or absolute path

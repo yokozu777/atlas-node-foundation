@@ -1,0 +1,11 @@
+# Optional per-host overrides.
+# Copy to host_vars/<inventory_hostname>.yml (host_vars/* is gitignored except examples).
+#
+# Prefer inventory + group_vars/all/atlas-node-foundation.yml for shared knobs; use host_vars for:
+#   hostname, ansible_user/port, disk WWN slots, NIC names, etc.
+#
+# hostname: node01.example.com
+# ansible_user: localuser
+# ansible_port: 22
+# # prepare_data_disk inventory slot (see role 23_init_data_disk / provision.disks):
+# # prepare_data_disk_inventory_slot: "1"

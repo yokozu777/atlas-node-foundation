@@ -1,0 +1,3 @@
+# Role 08_configure_security default variables (override in group_vars/all/atlas-node-foundation.yml or host_vars)
+disable_selinux: true  # Disable SELinux (Oracle Linux only)
+apparmor_disable: true  # Stop and disable AppArmor service when true

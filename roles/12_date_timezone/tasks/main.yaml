@@ -1,0 +1,197 @@
+---
+- name: Gather only OS distribution facts
+  ansible.builtin.setup:
+    gather_subset:
+      - min
+    filter: ansible_distribution
+
+- name: Set NTP service name based on distro
+  ansible.builtin.set_fact:
+    ntp_service_name: >-
+      {{ 'chrony' if ansible_facts['distribution'] in ['Ubuntu', 'Debian'] else (
+         'chronyd' if ansible_facts['distribution'] == 'OracleLinux' else '') }}
+
+- name: Set timezone
+  community.general.timezone:
+    name: "{{ timezone }}"
+
+- name: Configure timezone data automatically (Ubuntu/Debian only)
+  ansible.builtin.command: dpkg-reconfigure -f noninteractive tzdata
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  register: tzdata_result
+  changed_when: tzdata_result.rc == 0
+  failed_when: tzdata_result.rc != 0
+  when: ansible_facts['distribution'] | default('') in ['Ubuntu', 'Debian']
+
+# Host chrony is skipped when another stack owns the clock (e.g. infra-edge NTP
+# compose with CAP_SYS_TIME). Timezone still applies.
+- name: Skip host chrony management (external NTP server owns clock)
+  ansible.builtin.debug:
+    msg: >-
+      ntp_manage_host_chrony=false — timezone only; host chrony skipped
+      (NTP server / compose owns system clock).
+  when: not (ntp_manage_host_chrony | default(true) | bool)
+
+- name: Probe whether timedatectl can manage NTP
+  ansible.builtin.command:
+    cmd: timedatectl show -p CanNTP --value
+  register: timedatectl_can_ntp
+  changed_when: false
+  failed_when: false
+
+- name: Disable systemd NTP clients when host chrony is not managed
+  ansible.builtin.command:
+    cmd: timedatectl set-ntp false
+  when:
+    - not (ntp_manage_host_chrony | default(true) | bool)
+    - (timedatectl_can_ntp.stdout | default('') | trim | lower) == 'yes'
+
+- name: Enable NTP synchronization
+  ansible.builtin.command:
+    cmd: timedatectl set-ntp true
+  when:
+    - ntp_manage_host_chrony | default(true) | bool
+    - (timedatectl_can_ntp.stdout | default('') | trim | lower) == 'yes'
+
+- name: Configure chrony on Ubuntu and Debian
+  when:
+    - ntp_manage_host_chrony | default(true) | bool
+    - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+  block:
+    - name: Ensure chrony is installed
+      ansible.builtin.apt:
+        name: chrony
+        state: present
+        update_cache: true
+
+    - name: Remove existing pool lines from chrony config Ubuntu&Debian
+      ansible.builtin.lineinfile:
+        path: /etc/chrony/chrony.conf
+        regexp: '^pool'
+        state: absent
+
+    - name: Ensure makestep is configured for deb
+      ansible.builtin.lineinfile:
+        path: /etc/chrony/chrony.conf
+        regexp: '^makestep\b'
+        line: 'makestep 1.0 -1'
+        insertafter: EOF
+        create: true
+        owner: root
+        group: root
+        mode: '0644'
+        state: present
+      register: sync_time_makestep_config
+      notify:
+        - Restart NTP
+
+    - name: Ensure chrony conf.d is included
+      ansible.builtin.lineinfile:
+        path: /etc/chrony/chrony.conf
+        regexp: '^confdir\s+/etc/chrony/conf\.d$'
+        line: 'confdir /etc/chrony/conf.d'
+        insertafter: EOF
+        create: true
+        owner: root
+        group: root
+        mode: '0644'
+        state: present
+      notify:
+        - Restart NTP
+
+    - name: Ensure chrony conf.d directory exists
+      ansible.builtin.file:
+        path: /etc/chrony/conf.d
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Configure NTP pool servers
+      ansible.builtin.template:
+        src: pool-servers.conf.j2
+        dest: /etc/chrony/conf.d/pool-servers.conf
+        owner: root
+        group: root
+        mode: '0644'
+      register: configure_ntp_servers_result
+      notify:
+        - Restart NTP
+
+- name: Configure NTP servers for Oracle Linux
+  when:
+    - ntp_manage_host_chrony | default(true) | bool
+    - ansible_facts['distribution'] == 'OracleLinux'
+  block:
+    - name: Configure NTP pool servers
+      ansible.builtin.template:
+        src: pool-servers.conf.j2
+        dest: /etc/chrony.conf
+        owner: root
+        group: root
+        mode: '0644'
+      register: configure_ntp_servers_result
+      notify:
+        - Restart NTP
+
+    - name: Ensure makestep is configured for oracle
+      ansible.builtin.lineinfile:
+        path: /etc/chrony.conf
+        regexp: '^makestep\b'
+        line: 'makestep 1.0 -1'
+        insertafter: EOF
+        state: present
+      register: sync_time_makestep_config
+      notify:
+        - Restart NTP
+
+- name: Flush handlers after chrony configuration changes
+  ansible.builtin.meta: flush_handlers
+  when:
+    - ntp_manage_host_chrony | default(true) | bool
+    - >-
+      (configure_ntp_servers_result is defined and configure_ntp_servers_result.changed)
+      or (sync_time_makestep_config is defined and sync_time_makestep_config.changed)
+
+- name: Force clock sync from NTP
+  ansible.builtin.shell: |
+    set -o pipefail
+    chronyc -a online
+    chronyc -a burst 4/4
+    chronyc -a makestep
+  args:
+    executable: /bin/bash
+  changed_when: true
+  when: ntp_manage_host_chrony | default(true) | bool
+
+- name: Wait for chrony to settle after NTP sync
+  ansible.builtin.command: sleep {{ ntp_sync_settle_seconds }}
+  changed_when: false
+  when: ntp_manage_host_chrony | default(true) | bool
+
+- name: Get NTP offset and stratum from chrony
+  ansible.builtin.shell: |
+    set -o pipefail
+    tracking=$(chronyc tracking 2>/dev/null)
+    offset=$(echo "$tracking" | awk -F': +' '/^System time/ { print $2 }' | awk '{ print $1 }' | sed 's/[+-]//')
+    stratum=$(echo "$tracking" | awk -F': +' '/^Stratum/ { print $2 }' | awk '{ print $1 }')
+    printf '%s\n%s\n' "${offset:-}" "${stratum:-}"
+  args:
+    executable: /bin/bash
+  register: ntp_sync_tracking
+  changed_when: false
+  when: ntp_manage_host_chrony | default(true) | bool
+
+- name: Assert clock is synced from NTP
+  ansible.builtin.assert:
+    that:
+      - ntp_sync_tracking.stdout_lines[0] | default('') | trim | length > 0
+      - ntp_sync_tracking.stdout_lines[0] | default('0') | trim | float <= ntp_sync_max_offset_seconds
+      - ntp_sync_tracking.stdout_lines[1] | default('') | trim | length > 0
+      - ntp_sync_tracking.stdout_lines[1] | default('0') | trim | int >= 1
+    fail_msg: >-
+      NTP sync failed after init: offset={{ ntp_sync_tracking.stdout_lines[0] | default('unknown') }}s,
+      stratum={{ ntp_sync_tracking.stdout_lines[1] | default('unknown') }}.
+      Check chrony config (makestep 1.0 -1) and ntp_servers.
+  when: ntp_manage_host_chrony | default(true) | bool

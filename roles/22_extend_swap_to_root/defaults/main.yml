@@ -1,0 +1,2 @@
+# Extend root filesystem with free LVM space reclaimed after swap removal
+extend_swap_to_root: true

@@ -1,0 +1,11 @@
+{# One yum section per pkg_repos entry. item.uri is the mirror root. #}
+{% set kind = item._meta.kind %}
+[{{ item.name }}]
+name={{ item.name }}
+{% if kind == 'pgdg-yum' %}
+baseurl={{ item.uri }}/{{ pgsql_version | default('18') }}/redhat/rhel-{{ ansible_distribution_major_version }}-x86_64/
+{% else %}
+baseurl={{ item.uri }}/
+{% endif %}
+enabled=1
+gpgcheck=0

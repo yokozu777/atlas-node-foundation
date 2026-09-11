@@ -1,0 +1,218 @@
+---
+- name: Stop cloud-init services (if present)
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: stopped
+    enabled: no
+    masked: yes
+  loop:
+    - cloud-init.service
+    - cloud-init-local.service
+    - cloud-config.service
+    - cloud-final.service
+  ignore_errors: true
+  when: remove_cloud_init | default(false) | bool
+
+- name: Remove cloud-init on RedHat-based systems (Oracle Linux)
+  ansible.builtin.yum:
+    name: cloud-init
+    state: absent
+  when:
+    - ansible_facts['distribution'] == 'OracleLinux'
+    - remove_cloud_init | default(false) | bool
+
+- name: Remove cloud-init on Debian-based systems (Ubuntu/Debian)
+  ansible.builtin.apt:
+    name: cloud-init
+    state: absent
+    purge: yes
+    update_cache: yes
+  when:
+    - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+    - remove_cloud_init | default(false) | bool
+
+- name: Remove snap and related services on Ubuntu
+  ansible.builtin.apt:
+    name:
+      - snapd
+    state: absent
+    purge: yes
+    autoremove: yes
+  when:
+    - ansible_facts['distribution'] == 'Ubuntu'
+    - remove_snap | default(false) | bool
+
+- name: Mask lingering snap services (just in case)
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: no
+    state: stopped
+    masked: yes
+  loop:
+    - snapd.apparmor.service
+    - snapd.seeded.service
+  when:
+    - ansible_facts['distribution'] == 'Ubuntu'
+    - remove_snap | default(false) | bool
+  ignore_errors: true
+
+- name: Stop unattended-upgrades and apt periodic timers (Ubuntu/Debian)
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+    masked: true
+  loop:
+    - unattended-upgrades.service
+    - apt-daily.timer
+    - apt-daily-upgrade.timer
+  ignore_errors: true
+  when:
+    - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+    - remove_unattended_upgrades | default(false) | bool
+
+- name: Remove unattended-upgrades package (Ubuntu/Debian)
+  ansible.builtin.apt:
+    name: unattended-upgrades
+    state: absent
+    purge: true
+    autoremove: true
+  when:
+    - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+    - remove_unattended_upgrades | default(false) | bool
+
+- name: Remove unattended-upgrades configuration files (Ubuntu/Debian)
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/apt/apt.conf.d/50unattended-upgrades
+    - /etc/apt/apt.conf.d/50auto-upgrades
+  when:
+    - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+    - remove_unattended_upgrades | default(false) | bool
+
+- name: Disable apt periodic unattended upgrades (Ubuntu/Debian)
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    content: |
+      APT::Periodic::Update-Package-Lists "0";
+      APT::Periodic::Download-Upgradeable-Packages "0";
+      APT::Periodic::AutocleanInterval "0";
+      APT::Periodic::Unattended-Upgrade "0";
+    mode: '0644'
+  when:
+    - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+    - remove_unattended_upgrades | default(false) | bool
+
+- name: Disable host auditd (stop, remove packages, scrub logs)
+  when: disable_auditd | bool
+  block:
+    - name: Stop and mask audit-related systemd units
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: stopped
+        enabled: false
+        masked: true
+      loop:
+        - auditd
+        - audit-rules
+      failed_when: false
+      changed_when: true
+
+    - name: Remove audit package (Oracle Linux)
+      ansible.builtin.dnf:
+        name:
+          - audit
+        state: absent
+        autoremove: true
+      when: ansible_facts['distribution'] == 'OracleLinux'
+
+    - name: Remove auditd packages (Ubuntu/Debian)
+      ansible.builtin.apt:
+        name:
+          - auditd
+          - audispd-plugins
+        state: absent
+        purge: true
+        autoremove: true
+      when: ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+
+    - name: Remove audit configuration and log directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/audit
+        - /var/log/audit
+
+    - name: Check if audit=0 is already in GRUB cmdline
+      ansible.builtin.shell: grep -E '^GRUB_CMDLINE_LINUX' /etc/default/grub | grep -q 'audit=0'
+      register: grub_audit0_present
+      changed_when: false
+      failed_when: false
+
+    - name: Add audit=0 to GRUB_CMDLINE_LINUX
+      ansible.builtin.lineinfile:
+        path: /etc/default/grub
+        backrefs: true
+        regexp: '^GRUB_CMDLINE_LINUX="(.*)"$'
+        line: 'GRUB_CMDLINE_LINUX="\1 audit=0"'
+      when: grub_audit0_present.rc != 0
+      register: grub_audit0_linux
+
+    - name: Add audit=0 to GRUB_CMDLINE_LINUX_DEFAULT
+      ansible.builtin.lineinfile:
+        path: /etc/default/grub
+        backrefs: true
+        regexp: '^GRUB_CMDLINE_LINUX_DEFAULT="(.*)"$'
+        line: 'GRUB_CMDLINE_LINUX_DEFAULT="\1 audit=0"'
+      when: grub_audit0_present.rc != 0
+      register: grub_audit0_default
+
+    - name: Update GRUB configuration (Oracle Linux)
+      ansible.builtin.command: grub2-mkconfig -o /boot/grub2/grub.cfg
+      when:
+        - ansible_facts['distribution'] == 'OracleLinux'
+        - grub_audit0_linux is changed or grub_audit0_default is changed
+      changed_when: true
+
+    - name: Update GRUB configuration (Ubuntu/Debian)
+      ansible.builtin.command: update-grub
+      when:
+        - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+        - grub_audit0_linux is changed or grub_audit0_default is changed
+      changed_when: true
+
+    - name: Gather service facts for auditd verification
+      ansible.builtin.service_facts:
+
+    - name: Verify auditd is not running
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.services.get('auditd.service', {}).get('state', 'inactive') != 'running'
+          - ansible_facts.services.get('auditd.service', {}).get('status', 'not-found') != 'enabled'
+        fail_msg: auditd is still active after disable_auditd=true
+
+    - name: Verify audit packages are absent (Oracle Linux)
+      ansible.builtin.command: rpm -q audit
+      register: audit_rpm_check
+      failed_when: audit_rpm_check.rc == 0
+      changed_when: false
+      when: ansible_facts['distribution'] == 'OracleLinux'
+
+    - name: Verify auditd package is absent (Ubuntu/Debian)
+      ansible.builtin.command: dpkg-query -W -f='${Status}' auditd
+      register: audit_dpkg_check
+      failed_when: audit_dpkg_check.stdout is search('install ok installed')
+      changed_when: false
+      when: ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+
+- name: Remove systemd-resolved package
+  ansible.builtin.apt:
+    name: systemd-resolved
+    state: absent
+  when:
+    - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+    - disable_systemd_resolved | default(false) | bool
+

@@ -1,0 +1,7 @@
+# Role 11_certificates default variables (override in group_vars/all/atlas-node-foundation.yml)
+certificates_configure: false  # Enable certificate configuration when true
+# string or list of HTTPS PEM root URLs; empty string / [] = skip download
+pki_ca_url: ""
+# Verify TLS when downloading pki_ca_url (false for private step-ca bootstrap).
+ca_certificate_validate_certs: false
+custom_certs_dir: ""  # Path to custom certs dir relative to playbook_dir; .crt and .pem installed

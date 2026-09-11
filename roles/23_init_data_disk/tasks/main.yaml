@@ -1,0 +1,329 @@
+---
+- name: Validate prepare_data_disk_mode
+  ansible.builtin.assert:
+    that:
+      - prepare_data_disk_mode | default('raw') in ['raw', 'xfs', 'ext4']
+    fail_msg: "prepare_data_disk_mode must be raw, xfs, or ext4"
+  when: prepare_data_disk | default(false) | bool
+
+- name: Prepare non-system data disks
+  when: prepare_data_disk | default(false) | bool
+  block:
+    - name: Build data disk specs from inventory
+      ansible.builtin.set_fact:
+        init_data_disk_specs: >-
+          {{
+            (
+              hostvars[inventory_hostname].provision.disks | default([])
+              | selectattr('slot', 'equalto', prepare_data_disk_inventory_slot | int)
+              | selectattr('wwn', 'defined')
+              | rejectattr('wwn', 'equalto', '')
+              | list
+            )
+            if (prepare_data_disk_inventory_slot | default('') | string | trim | length) > 0
+            else (
+              hostvars[inventory_hostname].provision.disks | default([])
+              | selectattr('wwn', 'defined')
+              | rejectattr('wwn', 'equalto', '')
+              | list
+            )
+          }}
+      when: prepare_data_disk_use_inventory | default(true) | bool
+
+    - name: Fail when inventory has no data disk wwn for this host
+      ansible.builtin.assert:
+        that:
+          - init_data_disk_specs | default([]) | length > 0
+        fail_msg: >-
+          prepare_data_disk is enabled but no wwn found in provision.disks for
+          {{ inventory_hostname }} (hosts inventory). Refusing size-based auto-discovery.
+      when: prepare_data_disk_use_inventory | default(true) | bool
+
+    - name: Resolve data disks by inventory wwn or serial
+      ansible.builtin.shell: |
+        set -euo pipefail
+        python3 - <<'PY'
+        import json
+        import subprocess
+        import sys
+
+        specs = {{ init_data_disk_specs | to_json }}
+
+
+        def norm_wwn(value):
+            return (value or "").lower().replace("0x", "").strip()
+
+
+        def parent_disk(path):
+            current = path
+            while current:
+                rows = subprocess.check_output(
+                    ["lsblk", "-no", "NAME,TYPE", current], text=True
+                ).splitlines()
+                if not rows:
+                    return None
+                name, typ = rows[0].split()
+                if typ == "disk":
+                    return f"/dev/{name}"
+                parent = subprocess.check_output(
+                    ["lsblk", "-no", "PKNAME", current], text=True
+                ).strip()
+                current = f"/dev/{parent}" if parent else None
+            return None
+
+
+        def system_disks():
+            disks = set()
+            try:
+                root_src = subprocess.check_output(
+                    ["findmnt", "-n", "-o", "SOURCE", "/"], text=True
+                ).strip()
+                root_disk = parent_disk(root_src)
+                if root_disk:
+                    disks.add(root_disk)
+            except subprocess.CalledProcessError:
+                pass
+            try:
+                pvs = subprocess.check_output(
+                    ["pvs", "--noheadings", "-o", "pv_name"], text=True
+                )
+                for pv in pvs.splitlines():
+                    pv = pv.strip()
+                    if not pv:
+                        continue
+                    disk = parent_disk(pv)
+                    if disk:
+                        disks.add(disk)
+            except subprocess.CalledProcessError:
+                pass
+            return disks
+
+
+        def lsblk_disks():
+            rows = []
+            out = subprocess.check_output(
+                ["lsblk", "-dnp", "-o", "NAME,TYPE,WWN,SERIAL"], text=True
+            )
+            for line in out.splitlines():
+                parts = line.split()
+                if len(parts) < 2:
+                    continue
+                path, typ = parts[0], parts[1]
+                if typ != "disk":
+                    continue
+                if path.startswith("/dev/sr") or path.startswith("/dev/loop"):
+                    continue
+                wwn = parts[2] if len(parts) > 2 else ""
+                serial = parts[3] if len(parts) > 3 else ""
+                rows.append({"path": path, "wwn": wwn, "serial": serial})
+            return rows
+
+
+        sys_disks = system_disks()
+        disks = lsblk_disks()
+        resolved = []
+
+        for spec in specs:
+            want_wwn = norm_wwn(spec.get("wwn", ""))
+            want_serial = (spec.get("serial") or "").strip()
+            matches = []
+            for disk in disks:
+                got_wwn = norm_wwn(disk["wwn"])
+                if want_wwn and got_wwn and got_wwn == want_wwn:
+                    matches.append(disk["path"])
+                    continue
+                if want_serial and disk["serial"] == want_serial:
+                    matches.append(disk["path"])
+            if len(matches) == 0:
+                print(
+                    json.dumps(
+                        {
+                            "error": (
+                                f"data disk not found for inventory spec "
+                                f"wwn={spec.get('wwn')} serial={spec.get('serial')}"
+                            )
+                        }
+                    )
+                )
+                sys.exit(1)
+            if len(matches) > 1:
+                print(
+                    json.dumps(
+                        {
+                            "error": (
+                                f"ambiguous data disk for wwn={spec.get('wwn')} "
+                                f"serial={spec.get('serial')}: {matches}"
+                            )
+                        }
+                    )
+                )
+                sys.exit(1)
+            device = matches[0]
+            if device in sys_disks:
+                print(
+                    json.dumps(
+                        {
+                            "error": (
+                                f"inventory data disk {device} (wwn={spec.get('wwn')}) "
+                                "is a system disk — refusing to prepare"
+                            )
+                        }
+                    )
+                )
+                sys.exit(1)
+            resolved.append(device)
+
+        print(json.dumps(sorted(set(resolved))))
+        PY
+      args:
+        executable: /bin/bash
+      register: init_data_disk_inventory_resolve
+      changed_when: false
+      when: prepare_data_disk_use_inventory | default(true) | bool
+
+    - name: Fail when inventory data disk resolution failed
+      ansible.builtin.fail:
+        msg: >-
+          {{
+            (init_data_disk_inventory_resolve.stdout | default('{}') | from_json).error
+            | default(init_data_disk_inventory_resolve.stderr | default('unknown error'))
+          }}
+      when:
+        - prepare_data_disk_use_inventory | default(true) | bool
+        - init_data_disk_inventory_resolve.rc != 0
+
+    - name: Set data disk targets from inventory
+      ansible.builtin.set_fact:
+        init_data_disk_targets: "{{ init_data_disk_inventory_resolve.stdout | from_json }}"
+      when:
+        - prepare_data_disk_use_inventory | default(true) | bool
+        - init_data_disk_inventory_resolve.stdout | default('[]') | trim | length > 2
+
+    - name: Discover non-system data disks by size (legacy)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        python3 - <<'PY'
+        import json
+        import subprocess
+
+        min_size_gib = {{ prepare_data_disk_min_size_gib | default(50) | int }}
+
+        def run(*args):
+            return subprocess.check_output(args, text=True).strip()
+
+        def parent_disk(path):
+            current = path
+            while current:
+                rows = subprocess.check_output(
+                    ["lsblk", "-no", "NAME,TYPE", current], text=True
+                ).splitlines()
+                if not rows:
+                    return None
+                name, typ = rows[0].split()
+                if typ == "disk":
+                    return f"/dev/{name}"
+                parent = subprocess.check_output(
+                    ["lsblk", "-no", "PKNAME", current], text=True
+                ).strip()
+                current = f"/dev/{parent}" if parent else None
+            return None
+
+        system_disks = set()
+        try:
+            root_src = run("findmnt", "-n", "-o", "SOURCE", "/")
+            root_disk = parent_disk(root_src)
+            if root_disk:
+                system_disks.add(root_disk)
+        except subprocess.CalledProcessError:
+            pass
+
+        try:
+            pvs = subprocess.check_output(["pvs", "--noheadings", "-o", "pv_name"], text=True)
+            for pv in pvs.splitlines():
+                pv = pv.strip()
+                if not pv:
+                    continue
+                disk = parent_disk(pv)
+                if disk:
+                    system_disks.add(disk)
+        except subprocess.CalledProcessError:
+            pass
+
+        candidates = []
+        disks = subprocess.check_output(
+            ["lsblk", "-dnp", "-o", "NAME,TYPE,SIZE"], text=True
+        )
+        for line in disks.splitlines():
+            parts = line.split()
+            if len(parts) < 3:
+                continue
+            name, typ, size = parts[0], parts[1], parts[2]
+            if typ != "disk":
+                continue
+            if name.startswith("/dev/sr") or name.startswith("/dev/loop"):
+                continue
+            if name in system_disks:
+                continue
+
+            size_gib = 0.0
+            if size.endswith("G"):
+                size_gib = float(size[:-1])
+            elif size.endswith("T"):
+                size_gib = float(size[:-1]) * 1024
+            elif size.endswith("M"):
+                size_gib = float(size[:-1]) / 1024
+            if size_gib < min_size_gib:
+                continue
+
+            children = subprocess.check_output(
+                ["lsblk", "-ln", "-o", "NAME,TYPE,MOUNTPOINT,FSTYPE", name], text=True
+            )
+            has_mount = False
+            has_system_fs = False
+            for child_line in children.splitlines():
+                child_parts = child_line.split(maxsplit=3)
+                if len(child_parts) < 2:
+                    continue
+                _, child_type = child_parts[0], child_parts[1]
+                if child_type != "part":
+                    continue
+                mountpoint = child_parts[2] if len(child_parts) > 2 else ""
+                fstype = child_parts[3] if len(child_parts) > 3 else ""
+                if mountpoint not in ("", "-", "[SWAP]"):
+                    has_mount = True
+                if fstype in ("ext4", "xfs", "btrfs", "vfat", "swap"):
+                    has_system_fs = True
+
+            if has_mount or has_system_fs:
+                continue
+
+            candidates.append(name)
+
+        print(json.dumps(sorted(set(candidates))))
+        PY
+      args:
+        executable: /bin/bash
+      register: init_data_disk_candidates
+      changed_when: false
+      when: not (prepare_data_disk_use_inventory | default(true) | bool)
+
+    - name: Set discovered data disk list (legacy)
+      ansible.builtin.set_fact:
+        init_data_disk_targets: "{{ init_data_disk_candidates.stdout | from_json }}"
+      when:
+        - not (prepare_data_disk_use_inventory | default(true) | bool)
+        - init_data_disk_candidates.stdout | default('[]') | trim | length > 2
+
+    - name: Gather hardware-related facts for data disks
+      ansible.builtin.setup:
+        gather_subset:
+          - hardware
+      when: init_data_disk_targets | default([]) | length > 0
+
+    - name: Prepare each data disk
+      ansible.builtin.include_tasks: prepare_data_disk.yml
+      loop: "{{ init_data_disk_targets | default([]) }}"
+      loop_control:
+        loop_var: init_data_disk
+        label: "{{ init_data_disk }}"
+      when: init_data_disk_targets | default([]) | length > 0

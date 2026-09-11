@@ -1,0 +1,3 @@
+# Grow system disk partitions and LVM volume group to use all available disk space
+# (e.g. after Terraform/Proxmox disk resize; Oracle cloud-init keeps ~32G root LV)
+grow_disk_to_full: false

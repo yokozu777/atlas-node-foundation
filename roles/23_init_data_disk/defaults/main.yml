@@ -1,0 +1,19 @@
+# Prepare non-system data disks for Rook/Ceph (workers)
+prepare_data_disk: false
+
+# Resolve targets from host inventory provision.disks (wwn/serial), not by size scan
+prepare_data_disk_use_inventory: true
+
+# Optional: restrict to a single slot (e.g. 1 for second disk). Empty = all disks with wwn
+prepare_data_disk_inventory_slot: ""
+
+# Legacy size-based discovery when prepare_data_disk_use_inventory: false
+prepare_data_disk_min_size_gib: 50
+
+# raw   — whole disk for Rook/Ceph (no partition); existing partitions are wiped
+# xfs   — GPT + single partition, formatted xfs
+# ext4  — GPT + single partition, formatted ext4
+prepare_data_disk_mode: raw
+
+# For raw mode: remove existing partition table before Rook claims the disk
+prepare_data_disk_wipe_existing_partitions: true

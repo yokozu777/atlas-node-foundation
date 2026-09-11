@@ -1,0 +1,25 @@
+---
+# OS facts for tag-split clusterctl invocations (ansible.cfg: gather_facts=false).
+# Tag `00_gather_facts` (not `always`) — first remote init invocation in cluster.yaml.
+#
+# Requires fact_caching=jsonfile + ANSIBLE_CACHE_PLUGIN_CONNECTION (clusterctl / ./run.sh).
+# setup() writes distribution/network into the jsonfile cache; later --tags playbook
+# processes reload ansible_facts from that cache without re-running this role.
+# service_facts are not always mirrored into the cache payload — set_fact cacheable
+# keeps `services` available for roles that need it.
+
+- name: Gather distribution and network facts
+  ansible.builtin.setup:
+    gather_subset:
+      - "!all"
+      - distribution
+      - network
+
+- name: Gather service facts
+  ansible.builtin.service_facts:
+
+- name: Persist service facts in fact cache
+  ansible.builtin.set_fact:
+    services: "{{ ansible_facts.services }}"
+    cacheable: true
+  when: ansible_facts.services is defined

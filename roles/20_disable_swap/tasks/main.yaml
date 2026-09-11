@@ -1,0 +1,247 @@
+---
+- name: Disable swap on host
+  when: disable_swap | default(true) | bool
+  block:
+    - name: Discover active swap devices
+      ansible.builtin.shell: |
+        set -euo pipefail
+        swapon --show=NAME --noheadings 2>/dev/null || true
+      args:
+        executable: /bin/bash
+      register: disable_swap_swapon
+      changed_when: false
+      failed_when: false
+
+    - name: Discover swap block devices by filesystem type
+      ansible.builtin.shell: |
+        set -euo pipefail
+        lsblk -lno PATH,FSTYPE 2>/dev/null | awk '$2 == "swap" { print $1 }'
+      args:
+        executable: /bin/bash
+      register: disable_swap_lsblk_swap
+      changed_when: false
+      failed_when: false
+
+    - name: Discover configured swap entries in fstab
+      ansible.builtin.shell: |
+        set -euo pipefail
+        awk '!/^[[:space:]]*#/ && $3 == "swap" { print $1 }' /etc/fstab
+      args:
+        executable: /bin/bash
+      register: disable_swap_fstab_swap_devices
+      changed_when: false
+      failed_when: false
+
+    - name: Discover swap partitions by type
+      ansible.builtin.command: blkid -t TYPE=swap -o device
+      register: disable_swap_blkid_swap
+      changed_when: false
+      failed_when: false
+
+    - name: Build swap device list
+      ansible.builtin.set_fact:
+        disable_swap_devices: >-
+          {{
+            (
+              (disable_swap_swapon.stdout_lines | default([]))
+              + (disable_swap_lsblk_swap.stdout_lines | default([]))
+              + (disable_swap_fstab_swap_devices.stdout_lines | default([]))
+              + (disable_swap_blkid_swap.stdout_lines | default([]))
+            )
+            | map('trim')
+            | reject('equalto', '')
+            | unique
+            | list
+          }}
+
+    - name: Build canonical swap device paths
+      ansible.builtin.shell: |
+        set -euo pipefail
+        for device in {{ disable_swap_devices | join(' ') }}; do
+          [[ -z "$device" ]] && continue
+          readlink -f "$device" 2>/dev/null || true
+          lsblk -ln -o PATH "$device" 2>/dev/null || true
+          case "$device" in
+            /dev/mapper/*)
+              base="${device#/dev/mapper/}"
+              vg="${base%%-*}"
+              lv="${base#${vg}-}"
+              vg="${vg//--/-}"
+              lv="${lv//--/-}"
+              echo "/dev/${vg}/${lv}"
+              ;;
+            /dev/dm-*)
+              mapper_name="$(lsblk -ln -o NAME "$device" 2>/dev/null | head -1 || true)"
+              if [[ -n "$mapper_name" ]]; then
+                readlink -f "/dev/mapper/${mapper_name}" 2>/dev/null || true
+              fi
+              ;;
+          esac
+        done | sort -u
+      args:
+        executable: /bin/bash
+      register: disable_swap_canonical_paths
+      changed_when: false
+      failed_when: false
+      when: disable_swap_devices | length > 0
+
+    - name: Discover LVM logical volumes (JSON)
+      ansible.builtin.command: lvs --reportformat json --noheadings -o vg_name,lv_name,lv_path
+      register: disable_swap_lvs_json
+      changed_when: false
+      failed_when: false
+
+    - name: Discover swap LVM volumes by device path
+      ansible.builtin.set_fact:
+        disable_swap_lvm_by_path: >-
+          {{
+            (
+              (disable_swap_lvs_json.stdout | default('{}') | from_json).report[0].lv
+              if (
+                disable_swap_lvs_json is defined
+                and (disable_swap_lvs_json.stdout | default('') | length) > 0
+                and (disable_swap_lvs_json.stdout | from_json).report is defined
+              )
+              else []
+            )
+            | selectattr('lv_path', 'defined')
+            | selectattr(
+                'lv_path',
+                'in',
+                (
+                  (disable_swap_devices | default([]))
+                  + (disable_swap_canonical_paths.stdout_lines | default([]))
+                )
+                | map('trim')
+                | reject('equalto', '')
+                | unique
+                | list
+              )
+            | list
+          }}
+      when: disable_swap_devices | length > 0
+
+    - name: Set default empty swap LVM list by path
+      ansible.builtin.set_fact:
+        disable_swap_lvm_by_path: []
+      when: disable_swap_devices | length == 0
+
+    - name: Discover swap LVM volumes by filesystem type
+      ansible.builtin.shell: |
+        set -euo pipefail
+        python3 - <<'PY'
+        import json
+        import subprocess
+        import sys
+
+        try:
+            raw = subprocess.check_output(
+                ["lvs", "--reportformat", "json", "--noheadings", "-o", "vg_name,lv_name,lv_path"],
+                text=True,
+            )
+            lvs = json.loads(raw)["report"][0]["lv"]
+        except (subprocess.CalledProcessError, KeyError, IndexError, json.JSONDecodeError):
+            sys.exit(0)
+
+        found = []
+        seen = set()
+        for lv in lvs:
+            path = lv.get("lv_path", "")
+            if not path:
+                continue
+            result = subprocess.run(
+                ["blkid", "-o", "value", "-s", "TYPE", path],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.stdout.strip() != "swap":
+                continue
+            key = (lv["vg_name"], lv["lv_name"])
+            if key in seen:
+                continue
+            seen.add(key)
+            found.append(lv)
+
+        print(json.dumps(found))
+        PY
+      args:
+        executable: /bin/bash
+      register: disable_swap_lvm_by_fstype
+      changed_when: false
+      failed_when: false
+
+    - name: Merge discovered swap LVM volumes
+      ansible.builtin.set_fact:
+        disable_swap_lvm_volumes: >-
+          {{
+            (disable_swap_lvm_by_path | default([]))
+            + ((disable_swap_lvm_by_fstype.stdout | default('[]') | from_json) if (disable_swap_lvm_by_fstype.stdout | default('') | trim | length) > 0 else [])
+            | unique(attribute='lv_name')
+          }}
+
+    - name: Turn off active swap
+      ansible.builtin.command: swapoff -a
+      when: >
+        (disable_swap_swapon.stdout | default('') | trim | length) > 0
+        or (disable_swap_blkid_swap.stdout | default('') | trim | length) > 0
+        or (disable_swap_lsblk_swap.stdout | default('') | trim | length) > 0
+        or ((disable_swap_lvm_volumes | default([]) | length) > 0)
+      changed_when: true
+
+    - name: Comment swap entries in /etc/fstab
+      ansible.builtin.command: sed -i '/ swap / s/^/#/' /etc/fstab
+      when: disable_swap_fstab_swap_devices.stdout | default('') | trim | length > 0
+      changed_when: true
+
+    - name: Remove swap LVM logical volumes
+      community.general.lvol:
+        vg: "{{ item.vg_name }}"
+        lv: "{{ item.lv_name }}"
+        state: absent
+        force: true
+      loop: "{{ disable_swap_lvm_volumes | default([]) }}"
+      when: (disable_swap_lvm_volumes | default([]) | length) > 0
+
+    - name: Remove swap resume and rd.lvm.lv references from /etc/default/grub
+      ansible.builtin.replace:
+        path: /etc/default/grub
+        regexp: >-
+          resume=/dev/mapper/{{ (item.vg_name | replace('-', '--')) ~ '-' ~ (item.lv_name | replace('-', '--')) }}|rd\.lvm\.lv={{ item.vg_name }}/{{ item.lv_name }}
+        replace: ''
+      loop: "{{ disable_swap_lvm_volumes | default([]) }}"
+      when: (disable_swap_lvm_volumes | default([]) | length) > 0
+      register: disable_swap_grub_default_updates
+
+    - name: Remove swap kernel args with grubby (Oracle Linux)
+      ansible.builtin.command: >-
+        grubby --remove-args="rd.lvm.lv={{ item.vg_name }}/{{ item.lv_name }}
+        resume=/dev/mapper/{{ (item.vg_name | replace('-', '--')) ~ '-' ~ (item.lv_name | replace('-', '--')) }}"
+        --update-kernel=DEFAULT
+      loop: "{{ disable_swap_lvm_volumes | default([]) }}"
+      when:
+        - (disable_swap_lvm_volumes | default([]) | length) > 0
+        - ansible_facts['distribution'] == 'OracleLinux'
+      changed_when: true
+      register: disable_swap_grubby_updates
+
+    - name: Update GRUB configuration (Oracle Linux)
+      ansible.builtin.command: grub2-mkconfig -o /boot/grub2/grub.cfg
+      when:
+        - ansible_facts['distribution'] == 'OracleLinux'
+        - (
+            (disable_swap_grub_default_updates is defined
+             and (disable_swap_grub_default_updates.results | default([]) | selectattr('changed') | list | length) > 0)
+            or (disable_swap_grubby_updates is defined
+                and (disable_swap_grubby_updates.results | default([]) | length) > 0)
+            or ((disable_swap_lvm_volumes | default([]) | length) > 0)
+          )
+      changed_when: true
+
+    - name: Update GRUB configuration (Ubuntu/Debian)
+      ansible.builtin.command: update-grub
+      when:
+        - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+        - disable_swap_grub_default_updates is defined
+        - (disable_swap_grub_default_updates.results | default([]) | selectattr('changed') | list | length) > 0
+      changed_when: true

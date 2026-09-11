@@ -1,0 +1,762 @@
+---
+# --- Phase 1: prepare configuration (no network disruption) ---
+
+- name: Configure /etc/hosts
+  ansible.builtin.template:
+    src: hosts.j2
+    dest: /etc/hosts
+    owner: root
+    group: root
+    mode: '0644'
+  when: ansible_facts['default_ipv4']['address'] is defined
+  register: hosts_changed
+
+- name: Discover default gateway from routing table
+  ansible.builtin.command:
+    argv:
+      - ip
+      - -4
+      - route
+      - show
+      - default
+      - dev
+      - "{{ ansible_facts['default_ipv4']['interface'] }}"
+  register: default_route_cmd
+  changed_when: false
+  failed_when: false
+  when:
+    - network_interfaces | default([]) | length == 0
+    - ansible_facts['default_ipv4']['interface'] is defined
+
+- name: Set discovered gateway fact
+  ansible.builtin.set_fact:
+    discovered_gateway: >-
+      {{
+        ansible_facts['default_ipv4']['gateway'] | default('')
+        if (ansible_facts['default_ipv4']['gateway'] | default('') | length > 0)
+        else (default_route_cmd.stdout.split()[2] | default(''))
+      }}
+  when: network_interfaces | default([]) | length == 0
+
+- name: Apply default gateway fallback when discovery is empty
+  ansible.builtin.set_fact:
+    discovered_gateway: "{{ network_default_gateway }}"
+  when:
+    - network_interfaces | default([]) | length == 0
+    - discovered_gateway is defined
+    - discovered_gateway | default('') | length == 0
+
+- name: Build effective network interfaces from runtime discovery
+  ansible.builtin.set_fact:
+    effective_network_interfaces:
+      - name: "{{ ansible_facts['default_ipv4']['interface'] }}"
+        address: "{{ ansible_facts['default_ipv4']['address'] }}/{{ ansible_facts['default_ipv4']['prefix'] }}"
+        gateway: "{{ discovered_gateway | default('') }}"
+        dns: []
+  when:
+    - network_interfaces | default([]) | length == 0
+    - ansible_facts['default_ipv4']['interface'] is defined
+    - ansible_facts['default_ipv4']['address'] is defined
+    - ansible_facts['default_ipv4']['prefix'] is defined
+
+- name: Use user-provided network interfaces
+  ansible.builtin.set_fact:
+    effective_network_interfaces: "{{ network_interfaces }}"
+  when: network_interfaces | default([]) | length > 0
+
+- name: Pin Oracle Linux L3 from inventory for stable handoff
+  ansible.builtin.set_fact:
+    effective_network_interfaces:
+      - >-
+        {{
+          effective_network_interfaces[0] | combine({
+            'name': effective_network_interfaces[0].name | default('eth0'),
+            'address': (
+              ansible_host ~ '/'
+              ~ (effective_network_interfaces[0].address.split('/')[1] | default('24'))
+            ),
+            'gateway': (
+              effective_network_interfaces[0].gateway | default('')
+              if (effective_network_interfaces[0].gateway | default('') | length > 0)
+              else (discovered_gateway | default(network_default_gateway))
+            )
+          })
+        }}
+  when:
+    - ansible_facts['distribution'] == 'OracleLinux'
+    - network_interfaces | default([]) | length == 0
+    - ansible_host is defined
+    - effective_network_interfaces is defined
+    - effective_network_interfaces | length > 0
+
+- name: Assert effective network interfaces are available
+  ansible.builtin.assert:
+    that:
+      - effective_network_interfaces is defined
+      - effective_network_interfaces | length > 0
+      - effective_network_interfaces[0].name is defined
+      - effective_network_interfaces[0].address is defined
+      - effective_network_interfaces[0].address | length > 0
+    fail_msg: >-
+      Could not determine network configuration. Ensure the host has a default IPv4
+      interface or provide network_interfaces in group_vars/host_vars.
+
+- name: Resolve primary interface name from live IPv4 address
+  ansible.builtin.shell: |
+    set -euo pipefail
+    ADDR="{{ effective_network_interfaces[0].address.split('/')[0] }}"
+    NAME=$(ip -4 -o addr show | awk -v ip="${ADDR}" '$4 ~ "^" ip "/" { print $2; exit }')
+    if [[ -z "${NAME}" ]]; then
+      exit 1
+    fi
+    echo "${NAME}"
+  args:
+    executable: /bin/bash
+  register: primary_iface_runtime_name
+  changed_when: false
+  failed_when: false
+
+- name: Resolve primary interface name from MAC in existing ansible network unit
+  ansible.builtin.shell: |
+    set -euo pipefail
+    UNIT=$(ls /etc/systemd/network/*-ansible.network 2>/dev/null | head -1)
+    [[ -n "${UNIT}" ]] || exit 1
+    MAC=$(awk -F= '/^MACAddress=/ { print $2; exit }' "${UNIT}")
+    [[ -n "${MAC}" ]] || exit 1
+    for path in /sys/class/net/*; do
+      name=$(basename "${path}")
+      [[ "${name}" == "lo" ]] && continue
+      [[ "$(cat "${path}/address" 2>/dev/null)" == "${MAC}" ]] || continue
+      echo "${name}"
+      exit 0
+    done
+    exit 1
+  args:
+    executable: /bin/bash
+  register: primary_iface_runtime_name_by_mac
+  changed_when: false
+  failed_when: false
+  when: primary_iface_runtime_name.rc != 0
+
+- name: Apply runtime primary interface name
+  ansible.builtin.set_fact:
+    effective_network_interfaces: >-
+      {{
+        [
+          effective_network_interfaces[0] | combine(
+            {'name': (
+              primary_iface_runtime_name.stdout | trim
+              if primary_iface_runtime_name.rc == 0
+              else primary_iface_runtime_name_by_mac.stdout | trim
+            )}
+          )
+        ]
+        + (effective_network_interfaces[1:] if effective_network_interfaces | length > 1 else [])
+      }}
+  when: >-
+    (primary_iface_runtime_name.rc == 0 and (primary_iface_runtime_name.stdout | trim | length) > 0)
+    or (
+      primary_iface_runtime_name_by_mac is defined
+      and primary_iface_runtime_name_by_mac.rc == 0
+      and (primary_iface_runtime_name_by_mac.stdout | trim | length) > 0
+    )
+
+- name: Verify primary network interface exists
+  ansible.builtin.command:
+    argv:
+      - ip
+      - link
+      - show
+      - "{{ effective_network_interfaces[0].name }}"
+  register: primary_iface_link_check
+  changed_when: false
+  failed_when: primary_iface_link_check.rc != 0
+
+- name: Discover primary interface MAC address
+  ansible.builtin.command: cat /sys/class/net/{{ effective_network_interfaces[0].name }}/address
+  register: primary_iface_mac
+  changed_when: false
+
+- name: Add MAC address to effective network interfaces
+  ansible.builtin.set_fact:
+    effective_network_interfaces: >-
+      {{
+        [
+          effective_network_interfaces[0] | combine({'mac': primary_iface_mac.stdout | trim})
+        ]
+        + (effective_network_interfaces[1:] if effective_network_interfaces | length > 1 else [])
+      }}
+
+- name: Set Oracle bootstrap developer EPEL baseurl
+  ansible.builtin.set_fact:
+    oracle_bootstrap_epel_baseurl: >-
+      {{
+        (
+          'https://yum.oracle.com/repo/OracleLinux/OL10/'
+          ~ (ansible_facts['distribution_version'].split('.')[1] | default('0'))
+          ~ '/developer/EPEL/x86_64/'
+        )
+        if (
+          ansible_facts['distribution_version'] is defined
+          and ansible_facts['distribution_version'] is version('10', '>=')
+        )
+        else 'https://yum.oracle.com/repo/OracleLinux/OL9/developer/EPEL/x86_64/'
+      }}
+  when:
+    - ansible_facts['distribution'] == 'OracleLinux'
+    - oracle_bootstrap_epel_enabled | default(true) | bool
+
+- name: Deploy Oracle bootstrap developer EPEL repository
+  ansible.builtin.template:
+    src: oracle-bootstrap-epel.repo.j2
+    dest: "{{ oracle_bootstrap_epel_repo_file }}"
+    mode: "0644"
+  when:
+    - ansible_facts['distribution'] == 'OracleLinux'
+    - oracle_bootstrap_epel_enabled | default(true) | bool
+
+- name: Install systemd-networkd on Oracle Linux
+  ansible.builtin.dnf:
+    name: systemd-networkd
+    state: present
+  when: ansible_facts['distribution'] == 'OracleLinux'
+
+# systemd-networkd enable/start is deferred to ansible-networkd-handoff.sh to avoid
+# racing NetworkManager for the primary interface before the atomic handoff.
+
+- name: Deploy systemd-networkd interface units
+  ansible.builtin.template:
+    src: systemd-network.network.j2
+    dest: "/etc/systemd/network/10-{{ item.name }}-ansible.network"
+    owner: root
+    group: root
+    mode: '0644'
+  loop: "{{ effective_network_interfaces }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: networkd_units_deployed
+
+- name: Remove immutable flag from resolv.conf
+  ansible.builtin.command: chattr -i /etc/resolv.conf
+  when: dns_servers is defined and dns_servers | length > 0
+  failed_when: false
+  changed_when: false
+
+- name: Configure DNS servers
+  ansible.builtin.copy:
+    dest: /etc/resolv.conf
+    content: |
+      {% for dns in dns_servers %}
+      nameserver {{ dns }}
+      {% endfor %}
+    mode: '0644'
+  when: dns_servers is defined and dns_servers | length > 0
+  register: resolv_changed
+
+- name: Protect resolv.conf from being overwritten
+  ansible.builtin.command: chattr +i /etc/resolv.conf
+  when: dns_servers is defined and dns_servers | length > 0
+  failed_when: false
+  changed_when: true
+
+- name: Disable cloud-init network configuration
+  ansible.builtin.copy:
+    dest: /etc/cloud/cloud.cfg.d/99-disable-network.cfg
+    content: |
+      network: {config: disabled}
+    owner: root
+    group: root
+    mode: '0644'
+  ignore_errors: true
+
+- name: Find legacy netplan configuration files
+  ansible.builtin.find:
+    paths: /etc/netplan
+    patterns: "*.yaml,*.yml"
+  register: netplan_configs
+  failed_when: false
+
+- name: Find legacy NetworkManager ifcfg files
+  ansible.builtin.find:
+    paths: /etc/sysconfig/network-scripts
+    patterns: "ifcfg-*"
+  register: legacy_ifcfg_files
+  failed_when: false
+
+- name: Remove obsolete systemd-networkd drop-ins from previous role versions
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/systemd/network/99-disable-ipv6.network
+  failed_when: false
+
+# --- Phase 2: release interface from NM, hand off to systemd-networkd, then stop NM ---
+
+- name: Detect NetworkManager service unit
+  ansible.builtin.stat:
+    path: /lib/systemd/system/NetworkManager.service
+  register: nm_service_unit
+
+- name: Set NetworkManager present fact
+  ansible.builtin.set_fact:
+    network_manager_present: "{{ nm_service_unit.stat.exists | default(false) }}"
+
+- name: Find runtime netplan networkd units
+  ansible.builtin.find:
+    paths: /run/systemd/network
+    patterns: "*netplan*"
+  register: netplan_runtime_units
+  failed_when: false
+
+- name: Remove runtime netplan networkd units
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ netplan_runtime_units.files | default([]) }}"
+  failed_when: false
+
+- name: Install atomic networkd handoff script
+  ansible.builtin.template:
+    src: networkd-handoff.sh.j2
+    dest: /usr/local/sbin/ansible-networkd-handoff.sh
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Stop NetworkManager cloud setup before handoff
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+  loop:
+    - nm-cloud-setup.service
+    - nm-cloud-setup.timer
+  when: network_manager_present | bool
+  failed_when: false
+
+- name: Reload NetworkManager before handoff
+  ansible.builtin.command:
+    argv:
+      - nmcli
+      - general
+      - reload
+  register: nm_reload_before_handoff
+  changed_when: false
+  failed_when: false
+  when: network_manager_present | bool
+
+- name: Hand off primary interface to systemd-networkd
+  block:
+    - name: Remove stale handoff marker before run
+      ansible.builtin.file:
+        path: /run/ansible-networkd-handoff.ok
+        state: absent
+      failed_when: false
+
+    - name: Ensure NetworkManager conf.d directory exists before handoff
+      ansible.builtin.file:
+        path: /etc/NetworkManager/conf.d
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      when: network_manager_present | bool
+
+    - name: Mark primary interface NM_CONTROLLED=no in legacy ifcfg before handoff (Oracle Linux)
+      ansible.builtin.lineinfile:
+        path: "/etc/sysconfig/network-scripts/ifcfg-{{ effective_network_interfaces[0].name }}"
+        regexp: '^NM_CONTROLLED='
+        line: 'NM_CONTROLLED=no'
+        create: false
+      when:
+        - network_manager_present | bool
+        - ansible_facts['distribution'] == 'OracleLinux'
+      failed_when: false
+
+    - name: Persist NetworkManager unmanaged drop-in before handoff
+      ansible.builtin.template:
+        src: NetworkManager-unmanaged.conf.j2
+        dest: /etc/NetworkManager/conf.d/99-ansible-unmanaged.conf
+        owner: root
+        group: root
+        mode: '0644'
+      when: network_manager_present | bool
+
+    - name: Pre-pin primary IPv4 in kernel before handoff
+      ansible.builtin.command:
+        argv:
+          - ip
+          - addr
+          - replace
+          - "{{ effective_network_interfaces[0].address }}"
+          - dev
+          - "{{ effective_network_interfaces[0].name }}"
+      changed_when: false
+      when: network_manager_present | bool
+
+    - name: Enable and start systemd-networkd for handoff
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        enabled: true
+        state: started
+        daemon_reload: true
+      loop:
+        - systemd-networkd.socket
+        - systemd-networkd
+
+    - name: Reload and reconfigure primary interface in systemd-networkd
+      ansible.builtin.command:
+        argv: "{{ item }}"
+      loop:
+        - [networkctl, reload]
+        - [networkctl, reconfigure, "{{ effective_network_interfaces[0].name }}"]
+      changed_when: false
+      failed_when: false
+
+    - name: Wait for networkd handoff connectivity (Ansible poll, NM still running)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        IFACE="{{ effective_network_interfaces[0].name }}"
+        ADDR_IP="{{ effective_network_interfaces[0].address.split('/')[0] }}"
+        GW="{{ effective_network_interfaces[0].gateway | default('') }}"
+        systemctl is-active --quiet systemd-networkd
+        test -f "/etc/systemd/network/10-${IFACE}-ansible.network"
+        ip -4 -o addr show dev "${IFACE}" | grep -qE "(^|[[:space:]])${ADDR_IP}/"
+        if [[ -n "${GW}" ]]; then
+          ip -4 route show default | grep -q "via ${GW}"
+        fi
+        ss -tlnH sport = :22 | grep -q ':22'
+      args:
+        executable: /bin/bash
+      register: networkd_handoff_check
+      changed_when: false
+      until: networkd_handoff_check.rc == 0
+      retries: "{{ networkd_handoff_attempts | default(45) }}"
+      delay: 2
+
+    - name: Mark networkd handoff completion
+      ansible.builtin.file:
+        path: /run/ansible-networkd-handoff.ok
+        state: touch
+        mode: '0644'
+
+    - name: Verify networkd handoff completion marker
+      ansible.builtin.stat:
+        path: /run/ansible-networkd-handoff.ok
+      register: networkd_handoff_marker
+      failed_when: not networkd_handoff_marker.stat.exists
+
+  rescue:
+    - name: Emergency network recovery after failed handoff
+      ansible.builtin.command: /usr/local/sbin/ansible-networkd-handoff.sh --recover
+      ignore_errors: true
+      ignore_unreachable: true
+
+    - name: Wait for SSH after emergency network recovery
+      ansible.builtin.wait_for_connection:
+        connect_timeout: 5
+        delay: 5
+        sleep: 5
+        timeout: 120
+      ignore_errors: true
+      ignore_unreachable: true
+
+    - name: Fail after emergency network recovery — handoff must be retried
+      ansible.builtin.fail:
+        msg: >-
+          NetworkManager → systemd-networkd handoff failed on {{ inventory_hostname }}.
+          Emergency recover attempted over SSH; if the host is unreachable, run
+          /usr/local/sbin/ansible-networkd-handoff.sh --recover from the hypervisor console,
+          then re-run role 17_configure_network.
+
+- name: Verify primary IPv4 is configured after handoff
+  block:
+    - name: Wait for networkd to configure primary IPv4 before stopping NetworkManager
+      ansible.builtin.command:
+        argv:
+          - ip
+          - -4
+          - -o
+          - addr
+          - show
+      register: pre_nm_stop_ipv4
+      changed_when: false
+      until: effective_network_interfaces[0].address.split('/')[0] in pre_nm_stop_ipv4.stdout
+      retries: 15
+      delay: 2
+
+    - name: Stop NetworkManager after networkd has primary IPv4
+      ansible.builtin.systemd:
+        name: NetworkManager
+        state: stopped
+        enabled: false
+      when: network_manager_present | bool
+      failed_when: false
+
+    - name: Stop NetworkManager cloud setup
+      ansible.builtin.systemd:
+        name: nm-cloud-setup.service
+        state: stopped
+        enabled: false
+      when: network_manager_present | bool
+      failed_when: false
+
+# --- Phase 2c: common cleanup after handoff ---
+
+- name: Stop and mask systemd-networkd-wait-online
+  ansible.builtin.systemd:
+    name: systemd-networkd-wait-online.service
+    state: stopped
+    enabled: false
+    masked: true
+  failed_when: false
+
+# --- Phase 3: verify connectivity before irreversible cleanup ---
+
+- name: Discover live network interface names
+  ansible.builtin.command:
+    argv:
+      - ls
+      - /sys/class/net
+  register: live_network_interfaces_cmd
+  changed_when: false
+
+- name: Set live network interfaces fact
+  ansible.builtin.set_fact:
+    live_network_interfaces: >-
+      {{
+        live_network_interfaces_cmd.stdout_lines
+        | default([])
+        | reject('equalto', 'lo')
+        | list
+      }}
+
+- name: Render IPv6 disable sysctl drop-in for live interfaces
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/98-ansible-ipv6.conf
+    content: |
+      net.ipv6.conf.all.disable_ipv6 = 1
+      net.ipv6.conf.default.disable_ipv6 = 1
+      {% for iface in live_network_interfaces %}
+      net.ipv6.conf.{{ iface }}.disable_ipv6 = 1
+      {% endfor %}
+    owner: root
+    group: root
+    mode: '0644'
+  when: disable_ipv6 | default(false) | bool
+
+- name: Apply IPv6 disable sysctl drop-in
+  ansible.builtin.command: sysctl --system
+  changed_when: false
+  when: disable_ipv6 | default(false) | bool
+
+- name: Flush link-local IPv6 addresses
+  ansible.builtin.command:
+    argv:
+      - ip
+      - -6
+      - addr
+      - flush
+      - dev
+      - "{{ item }}"
+      - scope
+      - link
+  loop: "{{ live_network_interfaces }}"
+  register: ipv6_link_local_flush
+  changed_when: ipv6_link_local_flush.rc == 0
+  failed_when: false
+  when: disable_ipv6 | default(false) | bool
+
+- name: Wait for primary interface to be online
+  ansible.builtin.command:
+    argv:
+      - networkctl
+      - status
+      - "{{ effective_network_interfaces[0].name }}"
+  register: networkctl_status
+  changed_when: false
+  retries: 15
+  delay: 3
+  until: >
+    networkctl_status.rc == 0 and
+    ('online' in networkctl_status.stdout | lower or 'routable' in networkctl_status.stdout | lower)
+
+- name: Verify systemd-networkd is active
+  ansible.builtin.command: systemctl is-active systemd-networkd
+  register: networkd_active_check
+  changed_when: false
+  failed_when: networkd_active_check.stdout | trim != 'active'
+
+- name: Verify NetworkManager is not active
+  ansible.builtin.shell: systemctl is-active NetworkManager 2>/dev/null || true
+  args:
+    executable: /bin/bash
+  register: networkmanager_active_check
+  changed_when: false
+  failed_when: networkmanager_active_check.stdout | trim == 'active'
+
+- name: Verify primary interface is online in networkd
+  ansible.builtin.assert:
+    that:
+      - networkctl_status.rc == 0
+      - >-
+        'online' in networkctl_status.stdout | lower or
+        'routable' in networkctl_status.stdout | lower
+    fail_msg: >-
+      Interface {{ effective_network_interfaces[0].name }} is not online/routable in systemd-networkd.
+
+- name: Verify primary IPv4 address is configured
+  ansible.builtin.command:
+    argv:
+      - ip
+      - -4
+      - -o
+      - addr
+      - show
+      - dev
+      - "{{ effective_network_interfaces[0].name }}"
+  register: primary_ipv4_check
+  changed_when: false
+  failed_when: effective_network_interfaces[0].address.split('/')[0] not in primary_ipv4_check.stdout
+
+- name: Verify default gateway is reachable
+  ansible.builtin.command:
+    argv:
+      - ping
+      - -c
+      - "1"
+      - -W
+      - "2"
+      - "{{ effective_network_interfaces[0].gateway }}"
+  register: gateway_ping_check
+  changed_when: false
+  when: effective_network_interfaces[0].gateway | default('') | length > 0
+  failed_when: gateway_ping_check.rc != 0
+
+- name: Verify no link-local IPv6 addresses remain
+  ansible.builtin.command:
+    argv:
+      - ip
+      - -6
+      - addr
+      - show
+      - scope
+      - link
+  register: link_local_ipv6_check
+  changed_when: false
+  when: disable_ipv6 | default(false) | bool
+  failed_when: "'fe80::' in link_local_ipv6_check.stdout"
+
+# --- Phase 4: irreversible cleanup (only after network verify passed) ---
+
+- name: Mask NetworkManager after successful networkd handoff
+  ansible.builtin.systemd:
+    name: NetworkManager
+    masked: true
+  when: network_manager_present | bool
+  failed_when: false
+
+- name: Remove NetworkManager packages (Oracle Linux)
+  ansible.builtin.dnf:
+    name:
+      - NetworkManager
+      - NetworkManager-team
+      - NetworkManager-libnm
+    state: absent
+    autoremove: true
+  when: ansible_facts['distribution'] == 'OracleLinux'
+  failed_when: false
+
+- name: Remove network-manager package (Ubuntu/Debian)
+  ansible.builtin.apt:
+    name: network-manager
+    state: absent
+    purge: true
+    autoremove: true
+  when: ansible_facts['os_family'] == 'Debian'
+  failed_when: false
+
+- name: Remove legacy netplan configuration files
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ netplan_configs.files | default([]) }}"
+  when: netplan_configs.files is defined
+
+- name: Remove netplan packages (Ubuntu/Debian)
+  ansible.builtin.apt:
+    name:
+      - netplan.io
+      - netplan-generator
+      - libnetplan1
+    state: absent
+    purge: true
+    autoremove: true
+  when: ansible_facts['os_family'] == 'Debian'
+  failed_when: false
+
+- name: Remove legacy netplan directory
+  ansible.builtin.file:
+    path: /etc/netplan
+    state: absent
+    recurse: true
+  failed_when: false
+
+- name: Remove legacy NetworkManager ifcfg files
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ legacy_ifcfg_files.files | default([]) }}"
+  when: item.path | basename != 'ifcfg-lo'
+
+- name: Remove legacy network-scripts directory (Oracle Linux)
+  ansible.builtin.file:
+    path: /etc/sysconfig/network-scripts
+    state: absent
+  when: ansible_facts['distribution'] == 'OracleLinux'
+  failed_when: false
+
+# --- Phase 5: final package/layout assertions ---
+
+- name: Verify NetworkManager package is not installed (Oracle Linux)
+  ansible.builtin.command: rpm -q NetworkManager
+  register: nm_pkg_oracle_check
+  changed_when: false
+  failed_when: nm_pkg_oracle_check.rc == 0
+  when: ansible_facts['distribution'] == 'OracleLinux'
+
+- name: Verify network-manager package is not installed (Ubuntu/Debian)
+  ansible.builtin.command: dpkg -s network-manager
+  register: nm_pkg_debian_check
+  changed_when: false
+  failed_when: nm_pkg_debian_check.rc == 0
+  when: ansible_facts['os_family'] == 'Debian'
+
+- name: Verify legacy netplan directory is removed
+  ansible.builtin.stat:
+    path: /etc/netplan
+  register: netplan_dir_check
+  failed_when: netplan_dir_check.stat.exists | default(false)
+
+- name: Verify netplan.io package is not installed (Ubuntu/Debian)
+  ansible.builtin.command: dpkg -s netplan.io
+  register: netplan_pkg_debian_check
+  changed_when: false
+  failed_when: netplan_pkg_debian_check.rc == 0
+  when: ansible_facts['os_family'] == 'Debian'
+
+- name: Verify netplan-generator package is not installed (Ubuntu/Debian)
+  ansible.builtin.command: dpkg -s netplan-generator
+  register: netplan_generator_pkg_check
+  changed_when: false
+  failed_when: netplan_generator_pkg_check.rc == 0
+  when: ansible_facts['os_family'] == 'Debian'
+
+- name: Verify legacy network-scripts directory is removed (Oracle Linux)
+  ansible.builtin.stat:
+    path: /etc/sysconfig/network-scripts
+  register: network_scripts_dir_check
+  changed_when: false
+  failed_when: network_scripts_dir_check.stat.exists | default(false)
+  when: ansible_facts['distribution'] == 'OracleLinux'

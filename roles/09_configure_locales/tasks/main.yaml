@@ -1,0 +1,85 @@
+---
+- name: Install locales package (Ubuntu/Debian)
+  ansible.builtin.apt:
+    name: locales
+    state: present
+    update_cache: true
+  when:
+    - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+    - configure_locales | default(false) | bool
+
+- name: Configure /etc/locale.gen (Ubuntu/Debian)
+  ansible.builtin.lineinfile:
+    path: /etc/locale.gen
+    regexp: "^#?{{ item }}$"
+    line: "{{ item }}"
+    state: present
+    create: true
+    mode: '0644'
+  loop: "{{ additional_locales | default([]) }}"
+  when:
+    - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+    - configure_locales | default(false) | bool
+    - additional_locales is defined
+
+- name: Generate selected locales (Ubuntu/Debian)
+  ansible.builtin.command: locale-gen
+  changed_when: false
+  when:
+    - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+    - configure_locales | default(false) | bool
+    - additional_locales is defined
+
+- name: Configure /etc/default/locale (Ubuntu/Debian)
+  ansible.builtin.copy:
+    dest: /etc/default/locale
+    content: |
+      LANG={{ default_locale | default('en_US.UTF-8') }}
+      LC_ALL={{ default_locale | default('en_US.UTF-8') }}
+    mode: '0644'
+  when:
+    - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+    - configure_locales | default(false) | bool
+    - default_locale is defined
+
+- name: Reconfigure locales (Ubuntu/Debian)
+  ansible.builtin.command: dpkg-reconfigure -f noninteractive locales
+  changed_when: false
+  when:
+    - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+    - configure_locales | default(false) | bool
+    - default_locale is defined
+
+- name: Configure locale for Oracle Linux
+  ansible.builtin.lineinfile:
+    path: /etc/locale.conf
+    regexp: '^LANG='
+    line: "LANG={{ default_locale | default('en_US.UTF-8') }}"
+    create: true
+    mode: '0644'
+  when:
+    - ansible_facts['distribution'] == 'OracleLinux'
+    - configure_locales | default(false) | bool
+    - default_locale is defined
+
+- name: Configure locale environment for Oracle Linux
+  ansible.builtin.lineinfile:
+    path: /etc/environment
+    regexp: '^LANG='
+    line: "LANG={{ default_locale | default('en_US.UTF-8') }}"
+    create: true
+    mode: '0644'
+  when:
+    - ansible_facts['distribution'] == 'OracleLinux'
+    - configure_locales | default(false) | bool
+    - default_locale is defined
+
+- name: Install locale packages for Oracle Linux
+  ansible.builtin.dnf:
+    name:
+      - glibc-langpack-en
+    state: present
+  when:
+    - ansible_facts['distribution'] == 'OracleLinux'
+    - configure_locales | default(false) | bool
+    - default_locale is defined

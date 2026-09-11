@@ -1,0 +1,2 @@
+---
+# Resolved from group_vars when using atlas-clusterctl; override for standalone runs.

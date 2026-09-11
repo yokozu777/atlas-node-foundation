@@ -1,0 +1,10 @@
+# Role 06_configure_kernel default variables (override in group_vars/all/atlas-node-foundation.yml or host_vars)
+configure_kernel_params: false  # Configure kernel parameters (GRUB/EFI), rebuild GRUB when true
+pstate_performance: false  # Enable amd_pstate or intel_pstate for CPU performance
+amd_pstate: "active"  # AMD pstate: "active", "passive", "guided" (only if pstate_performance and AMD CPU)
+intel_pstate: "active"  # Intel pstate: "active", "passive" (only if pstate_performance and Intel CPU)
+change_smt: false  # Change SMT settings (adds nosmt=force when true)
+smt: "off"  # SMT value: "on" or "off" (only if change_smt: true)
+disable_ipv6: true  # Disable IPv6 in sysctl and add ipv6.disable=1 to kernel
+default_kernel_params: ""  # Additional kernel parameters (space-separated, e.g. "quiet splash")
+iommu_param: ""  # IOMMU kernel parameter (e.g. "iommu=on", "intel_iommu=on")

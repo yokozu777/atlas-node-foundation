@@ -1,0 +1,6 @@
+# Role 00_init default variables (override in group_vars/all/atlas-node-foundation.yml or host_vars)
+initial_ssh_port: 22  # SSH port for initial connection
+init_ssh_connect: key  # Initial connection method: 'password' or 'key'
+initial_key_file: ""  # Key for SSH: leave empty to use SSH_KEY/ANSIBLE_PRIVATE_KEY_FILE (run.sh); or set e.g. pub_keys/id_rsa for repo key
+initial_user: localuser  # Initial user for the system
+initial_password: "CHANGEME"  # Initial user password (use ansible-vault in production)

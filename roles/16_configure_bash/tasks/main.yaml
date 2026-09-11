@@ -1,0 +1,219 @@
+- name: Configure global Bash prompt and history size (Ubuntu/Debian)
+  ansible.builtin.blockinfile:
+    path: /etc/bash.bashrc
+    marker: "# {mark} global shell ANSIBLE MANAGED BLOCK"
+    block: |
+      # Ensure Bash Prompt
+      PS1='{{ custom_bash_prompt }}'
+      export PS1
+      # Set Bash history size
+      HISTSIZE={{ bash_history_size }}
+      HISTFILESIZE={{ bash_history_size }}
+      # Export variables for history control
+      export HISTSIZE
+      export HISTFILESIZE
+      # Configure less colors
+      export LESS_TERMCAP_mb=$'\033[01;31m'
+      export LESS_TERMCAP_md=$'\033[01;31m'
+      export LESS_TERMCAP_me=$'\033[0m'
+      export LESS_TERMCAP_se=$'\033[0m'
+      export LESS_TERMCAP_so=$'\033[01;44;33m'
+      export LESS_TERMCAP_ue=$'\033[0m'
+      export LESS_TERMCAP_us=$'\033[01;32m'
+  when:
+    - configure_bash | default(false)
+    - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+
+- name: Configure global Bash prompt and history size (Oracle Linux)
+  ansible.builtin.blockinfile:
+    path: /etc/bashrc
+    marker: "# {mark} global shell ANSIBLE MANAGED BLOCK"
+    block: |
+      # Ensure Bash Prompt
+      PS1='{{ custom_bash_prompt }}'
+      export PS1
+      # Set Bash history size
+      HISTSIZE={{ bash_history_size }}
+      HISTFILESIZE={{ bash_history_size }}
+      # Export variables for history control
+      export HISTSIZE
+      export HISTFILESIZE
+      # Configure less colors
+      export LESS_TERMCAP_mb=$'\033[01;31m'
+      export LESS_TERMCAP_md=$'\033[01;31m'
+      export LESS_TERMCAP_me=$'\033[0m'
+      export LESS_TERMCAP_se=$'\033[0m'
+      export LESS_TERMCAP_so=$'\033[01;44;33m'
+      export LESS_TERMCAP_ue=$'\033[0m'
+      export LESS_TERMCAP_us=$'\033[01;32m'
+  when:
+    - configure_bash | default(false)
+    - ansible_facts['distribution'] == 'OracleLinux'
+
+- name: Configure global profile for login shells
+  ansible.builtin.blockinfile:
+    path: /etc/profile
+    marker: "# {mark} global shell ANSIBLE MANAGED BLOCK"
+    block: |
+      # Ensure Bash Prompt for Login Shells
+      PS1='{{ custom_bash_prompt }}'
+      export PS1
+      # Set Bash history size
+      HISTSIZE={{ bash_history_size }}
+      HISTFILESIZE={{ bash_history_size }}
+      # Export variables for history control
+      export HISTSIZE
+      export HISTFILESIZE
+      {% if bash_export_locale | default(true) | bool %}
+      # Set system-wide locale (requires generated locale; see 09_configure_locales)
+      export LANG={{ default_locale | default('en_US.UTF-8') }}
+      export LC_ALL={{ default_locale | default('en_US.UTF-8') }}
+      {% endif %}
+      # Configure less colors
+      export LESS_TERMCAP_mb=$'\033[01;31m'
+      export LESS_TERMCAP_md=$'\033[01;31m'
+      export LESS_TERMCAP_me=$'\033[0m'
+      export LESS_TERMCAP_se=$'\033[0m'
+      export LESS_TERMCAP_so=$'\033[01;44;33m'
+      export LESS_TERMCAP_ue=$'\033[0m'
+      export LESS_TERMCAP_us=$'\033[01;32m'
+  when: configure_bash | default(false)
+
+- name: Get list of directories in /home
+  ansible.builtin.find:
+    paths: /home
+    file_type: directory
+    depth: 1
+  register: home_dirs
+
+- name: Parse usernames from /home
+  ansible.builtin.set_fact:
+    user_homes: "{{ home_dirs.files | map(attribute='path') | map('basename') | list }}"
+  when: configure_bash | default(false)
+
+- name: Ensure global bashrc is sourced in user .bashrc (Ubuntu/Debian)
+  ansible.builtin.blockinfile:
+    path: "/home/{{ item }}/.bashrc"
+    marker: "# {mark} global shell ANSIBLE MANAGED BLOCK"
+    block: |
+      if [ -f /etc/bash.bashrc ]; then
+          . /etc/bash.bashrc
+      fi
+    create: true
+    owner: "{{ item }}"
+    group: "{{ item }}"
+    mode: '0644'
+  loop: "{{ user_homes }}"
+  when:
+    - configure_bash | default(false)
+    - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+
+- name: Ensure global bashrc is sourced in user .bashrc (Oracle Linux)
+  ansible.builtin.blockinfile:
+    path: "/home/{{ item }}/.bashrc"
+    marker: "# {mark} global shell ANSIBLE MANAGED BLOCK"
+    block: |
+      if [ -f /etc/bashrc ]; then
+          . /etc/bashrc
+      fi
+    create: true
+    owner: "{{ item }}"
+    group: "{{ item }}"
+    mode: '0644'
+  loop: "{{ user_homes }}"
+  when:
+    - configure_bash | default(false)
+    - ansible_facts['distribution'] == 'OracleLinux'
+
+- name: Ensure .bash_profile sources .bashrc and sets PS1 (Oracle Linux)
+  ansible.builtin.blockinfile:
+    path: "/home/{{ item }}/.bash_profile"
+    marker: "# {mark} global shell ANSIBLE MANAGED BLOCK"
+    block: |
+      if [ -f ~/.bashrc ]; then
+          . ~/.bashrc
+      fi
+      if [ -z "$PS1" ] || [ "$PS1" != '{{ custom_bash_prompt }}' ]; then
+          PS1='{{ custom_bash_prompt }}'
+          export PS1
+      fi
+    create: true
+    owner: "{{ item }}"
+    group: "{{ item }}"
+    mode: '0644'
+  loop: "{{ user_homes }}"
+  when:
+    - configure_bash | default(false)
+    - ansible_facts['distribution'] == 'OracleLinux'
+
+- name: Ensure root .bashrc sources global bashrc (Ubuntu/Debian)
+  ansible.builtin.blockinfile:
+    path: /root/.bashrc
+    marker: "# {mark} global shell ANSIBLE MANAGED BLOCK"
+    block: |
+      if [ -f /etc/bash.bashrc ]; then
+          . /etc/bash.bashrc
+      fi
+    create: true
+    owner: root
+    group: root
+    mode: '0644'
+  when:
+    - configure_bash | default(false)
+    - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+
+- name: Ensure root .bashrc sources global bashrc (Oracle Linux)
+  ansible.builtin.blockinfile:
+    path: /root/.bashrc
+    marker: "# {mark} global shell ANSIBLE MANAGED BLOCK"
+    block: |
+      if [ -f /etc/bashrc ]; then
+          . /etc/bashrc
+      fi
+    create: true
+    owner: root
+    group: root
+    mode: '0644'
+  when:
+    - configure_bash | default(false)
+    - ansible_facts['distribution'] == 'OracleLinux'
+
+- name: Ensure root .bash_profile sources .bashrc and sets PS1 (Ubuntu/Debian)
+  ansible.builtin.blockinfile:
+    path: /root/.bash_profile
+    marker: "# {mark} global shell ANSIBLE MANAGED BLOCK"
+    block: |
+      if [ -f ~/.bashrc ]; then
+          . ~/.bashrc
+      fi
+      if [ -z "$PS1" ] || [ "$PS1" != '{{ custom_bash_prompt }}' ]; then
+          PS1='{{ custom_bash_prompt }}'
+          export PS1
+      fi
+    create: true
+    owner: root
+    group: root
+    mode: '0644'
+  when:
+    - configure_bash | default(false)
+    - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+
+- name: Ensure root .bash_profile sources .bashrc and sets PS1 (Oracle Linux)
+  ansible.builtin.blockinfile:
+    path: /root/.bash_profile
+    marker: "# {mark} global shell ANSIBLE MANAGED BLOCK"
+    block: |
+      if [ -f ~/.bashrc ]; then
+          . ~/.bashrc
+      fi
+      if [ -z "$PS1" ] || [ "$PS1" != '{{ custom_bash_prompt }}' ]; then
+          PS1='{{ custom_bash_prompt }}'
+          export PS1
+      fi
+    create: true
+    owner: root
+    group: root
+    mode: '0644'
+  when:
+    - configure_bash | default(false)
+    - ansible_facts['distribution'] == 'OracleLinux'

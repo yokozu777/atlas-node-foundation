@@ -1,0 +1,72 @@
+- name: Determine the group based on the distribution
+  set_fact:
+    user_group: "{{ 'sudo' if ansible_facts['distribution'] in ['Ubuntu', 'Debian'] else 'wheel' }}"
+
+- name: Change root password
+  ansible.builtin.user:
+    name: root
+    password: "{{ new_root_password | string | password_hash('sha512') }}"
+  when: change_root_password | default(false)
+
+- name: Add users with appropriate group permissions
+  ansible.builtin.user:
+    name: "{{ system_user }}"
+    shell: /bin/bash
+    groups: "{{ user_group }}"
+    append: true
+    createhome: true
+    state: present
+  # async: 45
+  # poll: 5
+
+- name: Hash password
+  ansible.builtin.set_fact:
+    hashed_password: "{{ system_user_password | string | password_hash('sha512') }}"
+
+- name: Set password for the user
+  ansible.builtin.user:
+    name: "{{ system_user }}"
+    password: "{{ hashed_password }}"
+  when: enable_system_user_password | default(false)
+
+- name: Allow group to have passwordless sudo
+  ansible.builtin.lineinfile:
+    dest: /etc/sudoers
+    state: present
+    regexp: "^%{{ user_group }}"
+    line: "%{{ user_group }} ALL=(ALL) NOPASSWD: ALL"
+    validate: 'visudo -cf %s'
+
+- name: Ensure AuthorizedKeysFile is set to .ssh/authorized_keys
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^AuthorizedKeysFile'
+    line: 'AuthorizedKeysFile .ssh/authorized_keys'
+    state: present
+
+- name: Find public keys in pub_keys folder
+  ansible.builtin.find:
+    paths: >-
+      {{
+        pub_keys_folder if pub_keys_folder is match('^/')
+        else [inventory_dir, pub_keys_folder | trim('/')] | path_join
+      }}
+    patterns: "*.pub"
+    file_type: file
+  register: pub_keys_found
+  delegate_to: localhost
+  become: false
+  run_once: true
+  when: pub_keys_folder is defined
+
+- name: Add all public keys from the specified folder
+  ansible.posix.authorized_key:
+    user: '{{ system_user }}'
+    key: "{{ lookup('file', item) }}"
+    state: present
+  loop: "{{ pub_keys_found.files | default([]) | map(attribute='path') | list }}"
+  when:
+    - pub_keys_folder is defined
+    - pub_keys_found is defined
+    - pub_keys_found.matched | default(0) > 0
+

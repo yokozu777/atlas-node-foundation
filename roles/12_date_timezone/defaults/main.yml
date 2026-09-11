@@ -1,0 +1,9 @@
+# Role 12_date_timezone default variables (override in group_vars/all/atlas-node-foundation.yml or host_vars)
+timezone: Europe/Moscow  # System timezone (IANA, e.g. America/New_York, UTC)
+ntp_servers:  # NTP servers for time sync (list of IPs or hostnames)
+  - 192.168.1.1
+ntp_sync_settle_seconds: 10
+ntp_sync_max_offset_seconds: 1.0
+# true = configure/enable host chrony (default leaf). false = timezone only;
+# host chrony skipped (e.g. infra NTP compose owns UDP/123 + system clock).
+ntp_manage_host_chrony: true

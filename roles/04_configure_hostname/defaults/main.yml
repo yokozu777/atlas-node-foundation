@@ -1,0 +1,2 @@
+# Role 04_configure_hostname default variables (override in host_vars or group_vars)
+# hostname is typically set per-host in host_vars/<inventory_hostname>.yml

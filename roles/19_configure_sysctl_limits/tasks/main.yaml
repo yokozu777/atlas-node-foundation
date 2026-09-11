@@ -1,0 +1,69 @@
+---
+- name: Copy system files
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    mode: '0644'
+  loop:
+    - { src: '999-sysctl.conf', dest: '/etc/sysctl.d/999-sysctl.conf' }
+  when: copy_system_files | default(false) | bool
+
+- name: Load sysctl-dependent kernel modules
+  community.general.modprobe:
+    name: "{{ item }}"
+    state: present
+  loop: "{{ sysctl_kernel_modules }}"
+  when: copy_system_files | default(false) | bool
+
+- name: Persist sysctl-dependent kernel modules
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/99-sysctl.conf
+    content: "{{ sysctl_kernel_modules | join('\n') }}\n"
+    mode: '0644'
+  when: copy_system_files | default(false) | bool
+
+- name: Remove conflicting settings from legacy /etc/sysctl.conf
+  ansible.builtin.lineinfile:
+    path: /etc/sysctl.conf
+    regexp: '^{{ item | regex_escape }}='
+    state: absent
+  loop: "{{ sysctl_verify_critical | map(attribute='key') | list }}"
+  failed_when: false
+  when: copy_system_files | default(false) | bool
+
+- name: Apply sysctl configuration immediately
+  ansible.builtin.command: sysctl --system
+  changed_when: false
+  when: copy_system_files | default(false) | bool
+
+- name: Enforce critical sysctl values after sysctl --system
+  ansible.builtin.command:
+    argv:
+      - sysctl
+      - -w
+      - "{{ item.key }}={{ item.value }}"
+  loop: "{{ sysctl_verify_critical }}"
+  changed_when: false
+  when: copy_system_files | default(false) | bool
+
+- name: Verify critical sysctl values
+  ansible.builtin.command: sysctl -n {{ item.key }}
+  register: sysctl_verify_result
+  changed_when: false
+  failed_when: sysctl_verify_result.stdout | trim != item.value
+  loop: "{{ sysctl_verify_critical }}"
+  when: copy_system_files | default(false) | bool
+
+- name: configure system settings, file descriptors and number of threads
+  community.general.pam_limits:
+    domain: '*'
+    limit_type: "{{ item.limit_type }}"
+    limit_item: "{{ item.limit_item }}"
+    value: "{{ item.value }}"
+  loop:
+    - { limit_type: '-', limit_item: 'nofile', value: unlimited }
+    - { limit_type: '-', limit_item: 'nproc', value: unlimited }
+    - { limit_type: 'soft', limit_item: 'memlock', value: unlimited }
+    - { limit_type: 'hard', limit_item: 'memlock', value: unlimited }
+  when: configure_system_limits | default(false) | bool
+

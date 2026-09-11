@@ -1,0 +1,80 @@
+---
+- name: Collect kernel parameters
+  ansible.builtin.set_fact:
+    kernel_params: >-
+      {{ 'amd_pstate=' + amd_pstate if pstate_performance | default(false) and global_cpu_vendor is defined and 'AuthenticAMD' in global_cpu_vendor else '' }}
+      {{ 'intel_pstate=' + intel_pstate if pstate_performance | default(false) and global_cpu_vendor is defined and 'GenuineIntel' in global_cpu_vendor else '' }}
+      {{ 'nosmt=force' if change_smt | default(false) and smt is defined and smt == 'off' else '' }}
+      {{ 'ipv6.disable=1' if disable_ipv6 | default(false) else '' }}
+      {{ default_kernel_params | default('') }}
+      {{ iommu_param | default('') }}
+  when: configure_kernel_params | default(false) | bool
+
+- name: Update kernel parameters in GRUB
+  ansible.builtin.lineinfile:
+    path: /etc/default/grub
+    regexp: '^GRUB_CMDLINE_LINUX_DEFAULT='
+    line: >-
+      GRUB_CMDLINE_LINUX_DEFAULT="{{ (kernel_params.split() | unique | join(' ')) | trim }}"
+    create: true
+    mode: '0644'
+    owner: root
+    group: root
+  register: grub_updated
+  when:
+    - configure_kernel_params | default(false) | bool
+    - global_boot_mode is defined
+    - global_boot_mode.strip() != 'efi'
+
+- name: Update GRUB configuration
+  ansible.builtin.command: grub2-mkconfig -o /boot/grub2/grub.cfg
+  when:
+    - configure_kernel_params | default(false) | bool
+    - global_boot_mode is defined
+    - global_boot_mode.strip() != 'efi'
+    - ansible_facts['distribution'] == 'OracleLinux'
+    - grub_updated.changed | default(false)
+  changed_when: true
+
+- name: Update GRUB configuration (Ubuntu/Debian)
+  ansible.builtin.command: update-grub
+  when:
+    - configure_kernel_params | default(false) | bool
+    - global_boot_mode is defined
+    - global_boot_mode.strip() != 'efi'
+    - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+    - grub_updated.changed | default(false)
+  changed_when: true
+
+- name: Update kernel parameters in EFI
+  when:
+    - configure_kernel_params | default(false) | bool
+    - global_boot_mode is defined
+    - global_boot_mode.strip() == 'efi'
+  block:
+    - name: Read existing kernel parameters from EFI
+      ansible.builtin.slurp:
+        src: /etc/kernel/cmdline
+      register: existing_cmdline
+      ignore_errors: true
+
+    - name: Merge new kernel parameters with existing ones
+      ansible.builtin.set_fact:
+        merged_kernel_params: >-
+          {{ ((existing_cmdline.content | default('') | b64decode | trim | replace('\n', ' ') | replace('\r', ' ') | split(" ")) +
+              (kernel_params.split())) |
+             unique |
+             join(" ") | trim }}
+      when: existing_cmdline.content is defined
+
+    - name: Set merged kernel parameters (new file)
+      ansible.builtin.set_fact:
+        merged_kernel_params: "{{ (kernel_params.split()) | unique | join(' ') | trim }}"
+      when: existing_cmdline.content is not defined
+
+    - name: Write updated kernel parameters to EFI
+      ansible.builtin.copy:
+        dest: /etc/kernel/cmdline
+        content: "{{ merged_kernel_params }}"
+        mode: '0644'
+      register: efi_updated

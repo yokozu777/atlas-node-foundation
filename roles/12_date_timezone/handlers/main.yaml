@@ -1,0 +1,6 @@
+- name: Restart NTP
+  ansible.builtin.service:
+    name: "{{ ntp_service_name }}"
+    state: restarted
+    enabled: true
+  when: ntp_service_name != ''

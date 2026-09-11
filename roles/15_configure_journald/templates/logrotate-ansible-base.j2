@@ -1,0 +1,13 @@
+# Ansible managed: baseline rotation for plain log files
+/var/log/wtmp
+/var/log/btmp
+/var/log/*.log
+{
+    {{ journald_logrotate_frequency }}
+    rotate {{ journald_logrotate_rotate }}
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 root utmp
+}

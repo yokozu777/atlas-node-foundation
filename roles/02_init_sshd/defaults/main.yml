@@ -1,0 +1,5 @@
+# Role 02_init_sshd default variables (override in group_vars/all/atlas-node-foundation.yml or host_vars)
+disable_root_login: false  # Disable root login over SSH
+disable_password_auth: false  # Disable password authentication
+change_default_ssh_port: false  # Change default SSH port (22)
+new_ssh_port: 2222  # New SSH port (only if change_default_ssh_port: true)

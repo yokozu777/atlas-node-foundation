@@ -1,0 +1,4 @@
+# Role 09_configure_locales default variables (override in group_vars/all/atlas-node-foundation.yml or host_vars)
+configure_locales: true  # Configure system locales by OS type when true
+additional_locales: ["en_US.UTF-8 UTF-8", "ru_RU.UTF-8 UTF-8"]  # Locales to generate (Ubuntu/Debian only)
+default_locale: "en_US.UTF-8"  # Default system locale

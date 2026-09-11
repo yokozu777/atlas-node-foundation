@@ -1,0 +1,5 @@
+# Role 99_update_reboot default variables (override in group_vars/all/atlas-node-foundation.yml or host_vars)
+update_now: false  # Run full system package update immediately when true
+system_update_scheduler: false  # Enable automatic system update via cron when true
+update_schedule_time: "03:00"  # Cron time for auto-update (HH:MM 24-hour)
+reboot_system: false  # Reboot system after configuration when true
