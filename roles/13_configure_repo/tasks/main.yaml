@@ -247,11 +247,10 @@
         dest: /usr/share/keyrings/postgresql.asc
         mode: "0644"
 
-    - name: Convert PGDG GPG key to deb822 keyring format
-      ansible.builtin.command:
-        cmd: gpg --dearmor --yes -o /usr/share/keyrings/postgresql.gpg /usr/share/keyrings/postgresql.asc
-      register: pgdg_key_dearmor
-      changed_when: pgdg_key_dearmor.rc == 0
+    - name: Remove legacy dearmored PGDG keyring
+      ansible.builtin.file:
+        path: /usr/share/keyrings/postgresql.gpg
+        state: absent
 
 - name: Install Docker apt keyring when containerd repo is active
   when:
@@ -288,17 +287,16 @@
     - name: Download Kubernetes APT Release.key
       ansible.builtin.get_url:
         url: "https://pkgs.k8s.io/core:/stable:/v{{ k8s_apt_repo_version }}/deb/Release.key"
-        dest: /etc/apt/keyrings/kubernetes-apt-keyring
+        dest: /etc/apt/keyrings/kubernetes-apt-keyring.asc
         mode: "0644"
 
-    - name: Convert Kubernetes APT key to GPG format
-      ansible.builtin.command:
-        cmd: >-
-          gpg --dearmor --yes
-          -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-          /etc/apt/keyrings/kubernetes-apt-keyring
-      args:
-        creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+    - name: Remove legacy Kubernetes keyring paths
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/apt/keyrings/kubernetes-apt-keyring
+        - /etc/apt/keyrings/kubernetes-apt-keyring.gpg
 
 - name: Deploy APT pkg_repos drop-ins
   ansible.builtin.template:

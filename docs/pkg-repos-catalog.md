@@ -30,7 +30,7 @@ public upstream URL, and the host nginx must send as `Host` / TLS SNI when mirro
 | `gitlab-runner-debian` | `https://packages.gitlab.com/runner/gitlab-runner/debian` | `packages.gitlab.com` | `gitlab-runner.sources` (atlas-gitlab-runner) | present |
 | `k8s-ubuntu-<ver>` | `https://pkgs.k8s.io/core:/stable:/v<ver>/deb/` | `pkgs.k8s.io` | `k8s-ubuntu-<ver>.sources` | present (templated) |
 
-Signing (typical): Debian/Ubuntu archive keyrings; PGDG → `/usr/share/keyrings/postgresql.gpg`.  
+Signing (typical): Debian/Ubuntu archive keyrings; PGDG → `/usr/share/keyrings/postgresql.asc` (armored, no `gpg` on the guest). Kubernetes deb uses `/etc/apt/keyrings/kubernetes-apt-keyring.asc`.  
 PGDG suite: `{{ ansible_distribution_release }}-pgdg`.  
 `debian-non-free` Deb822 uses Components `contrib non-free non-free-firmware` (bookworm+).
 

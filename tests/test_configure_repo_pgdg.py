@@ -33,7 +33,8 @@ class ConfigureRepoPgdgTest(unittest.TestCase):
         apt = (ROLE / "templates" / "apt-repo.sources.j2").read_text(encoding="utf-8")
         yum = (ROLE / "templates" / "yum-repo.repo.j2").read_text(encoding="utf-8")
         self.assertIn("pgdg-apt", apt)
-        self.assertIn("postgresql.gpg", apt)
+        self.assertIn("postgresql.asc", apt)
+        self.assertNotIn("postgresql.gpg", apt)
         self.assertIn("pgdg-yum", yum)
         self.assertIn("pgsql_version", yum)
 
@@ -41,7 +42,9 @@ class ConfigureRepoPgdgTest(unittest.TestCase):
         main = (ROLE / "tasks" / "main.yaml").read_text(encoding="utf-8")
         self.assertIn("pkg_repo_needs_keyring('pgdg')", main)
         self.assertIn("ACCC4CF8.asc", main)
-        self.assertIn("postgresql.gpg", main)
+        self.assertIn("postgresql.asc", main)
+        self.assertIn("kubernetes-apt-keyring.asc", main)
+        self.assertNotIn("gpg --dearmor", main)
 
     def test_defaults_keep_pgsql_version(self) -> None:
         defaults = (ROLE / "defaults" / "main.yml").read_text(encoding="utf-8")

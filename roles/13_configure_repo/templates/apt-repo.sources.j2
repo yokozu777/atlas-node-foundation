@@ -40,7 +40,7 @@ Types: deb
 URIs: {{ item.uri }}
 Suites: {{ release }}-pgdg
 Components: main
-Signed-By: /usr/share/keyrings/postgresql.gpg
+Signed-By: /usr/share/keyrings/postgresql.asc
 
 {% elif kind == 'docker-deb' %}
 Types: deb
@@ -53,7 +53,7 @@ Signed-By: /etc/apt/keyrings/docker.asc
 Types: deb
 URIs: {{ item.uri }}
 Suites: /
-Signed-By: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+Signed-By: /etc/apt/keyrings/kubernetes-apt-keyring.asc
 
 {% else %}
 {# unknown apt kind — should be filtered before template #}

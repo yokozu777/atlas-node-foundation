@@ -81,7 +81,7 @@ repos:
     official_url: "https://apt.postgresql.org/pub/repos/apt"
     upstream_host: apt.postgresql.org
     drop_in: "/etc/apt/sources.list.d/pgdg-apt.sources"
-    signed_by: "/usr/share/keyrings/postgresql.gpg"
+    signed_by: "/usr/share/keyrings/postgresql.asc"
     infra_mirror: present
     notes: >-
       Suite {{ release }}-pgdg. Legacy enable_repo_pgdg / enable_repo_pgdg_apt
