@@ -1,0 +1,4 @@
+# Role 07_configure_network_dns
+# Writes dns_servers into /etc/resolv.conf before roles that resolve internal names.
+# group_vars/all/atlas-node-foundation.yml overrides this default.
+dns_servers: ["192.168.1.1"]

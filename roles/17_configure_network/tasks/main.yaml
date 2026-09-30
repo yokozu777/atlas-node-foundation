@@ -236,28 +236,8 @@
     label: "{{ item.name }}"
   register: networkd_units_deployed
 
-- name: Remove immutable flag from resolv.conf
-  ansible.builtin.command: chattr -i /etc/resolv.conf
-  when: dns_servers is defined and dns_servers | length > 0
-  failed_when: false
-  changed_when: false
-
-- name: Configure DNS servers
-  ansible.builtin.copy:
-    dest: /etc/resolv.conf
-    content: |
-      {% for dns in dns_servers %}
-      nameserver {{ dns }}
-      {% endfor %}
-    mode: '0644'
-  when: dns_servers is defined and dns_servers | length > 0
-  register: resolv_changed
-
-- name: Protect resolv.conf from being overwritten
-  ansible.builtin.command: chattr +i /etc/resolv.conf
-  when: dns_servers is defined and dns_servers | length > 0
-  failed_when: false
-  changed_when: true
+- name: Configure DNS servers in resolv.conf
+  ansible.builtin.include_tasks: "{{ role_path }}/../07_configure_network_dns/tasks/main.yml"
 
 - name: Disable cloud-init network configuration
   ansible.builtin.copy:

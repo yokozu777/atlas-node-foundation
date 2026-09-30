@@ -177,6 +177,8 @@ All extra CLI arguments are forwarded to `ansible-playbook`.
 - **09_configure_locales** / **12_date_timezone** — locales, timezone, NTP
   (host chrony; set `ntp_manage_host_chrony: false` when another stack owns
   the clock, e.g. infra-edge NTP compose)
+- **10_manage_services** — enable/disable units
+- **07_configure_network_dns** — write `dns_servers` to `/etc/resolv.conf` before CA download
 - **11_certificates** — CA URL download and/or custom cert dir
 
 ### Repos / packages / services / shell
@@ -201,7 +203,7 @@ All extra CLI arguments are forwarded to `ansible-playbook`.
        v
   targets:       00_gather_facts --> 00_init --> backup --> sshd --> users
        --> hostname --> kernel --> security --> locales --> services
-       --> certificates --> timezone --> repos --> packages
+       --> dns --> certificates --> timezone --> repos --> packages
        --> journald --> bash --> remove_unwanted --> sysctl
        --> disable_swap --> grow_disk --> extend_swap --> data_disk
        --> update_reboot
@@ -217,7 +219,7 @@ All extra CLI arguments are forwarded to `ansible-playbook`.
 2. **00_gather_facts** (tag `00_gather_facts`) → **00_init** → **01_backup_etc** → **02_init_sshd** →
    **03_configure_users** → **04_configure_hostname** → **06_configure_kernel** →
    **08_configure_security** → **09_configure_locales** → **10_manage_services** →
-   **11_certificates** → **12_date_timezone** → **13_configure_repo** → **14_install_software** →
+   **10_manage_services** → **07_configure_network_dns** → **11_certificates** → **12_date_timezone** → **13_configure_repo** → **14_install_software** →
    **15_configure_journald** → **16_configure_bash** → **18_remove_unwanted_services** →
    **19_configure_sysctl_limits** → **20_disable_swap** → **21_grow_disk_to_full** →
    **22_extend_swap_to_root** → **23_init_data_disk** → **99_update_reboot**

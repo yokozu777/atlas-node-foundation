@@ -21,6 +21,7 @@ EXPECTED_ROLES: tuple[str, ...] = (
     "08_configure_security",
     "09_configure_locales",
     "10_manage_services",
+    "07_configure_network_dns",
     "11_certificates",
     "12_date_timezone",
     "13_configure_repo",
@@ -58,6 +59,8 @@ class NodeFoundationLayoutTest(unittest.TestCase):
         self.assertIn("node_foundation_init_hosts", text)
         self.assertIn("node_foundation_network_serial", text)
         self.assertIn("17_configure_network", text)
+        self.assertLess(text.find("role: 07_configure_network_dns"), text.find("role: 11_certificates"))
+        self.assertGreater(text.rfind("role: 17_configure_network"), text.find("role: 11_certificates"))
         self.assertNotIn("throttle:", (REPO_ROOT / "roles" / "17_configure_network" / "tasks" / "main.yaml").read_text(encoding="utf-8"))
         # Network play is last after the main role play.
         self.assertGreater(text.rfind("17_configure_network"), text.find("00_init"))

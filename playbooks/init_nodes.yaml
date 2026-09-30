@@ -38,6 +38,8 @@
       tags: [09_configure_locales, system, locale]
     - role: 10_manage_services
       tags: [10_manage_services, system, services]
+    - role: 07_configure_network_dns
+      tags: [07_configure_network_dns, network, dns]
     - role: 11_certificates
       tags: [11_certificates, security, certificates]
     - role: 12_date_timezone
