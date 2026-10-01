@@ -1,4 +1,4 @@
 # Role 07_configure_network_dns
 # Writes dns_servers into /etc/resolv.conf before roles that resolve internal names.
-# group_vars/all/atlas-node-foundation.yml overrides this default.
-dns_servers: ["192.168.1.1"]
+# When the list is unset, use the lab DNS address (dns_server_ip).
+dns_servers: "{{ [dns_server_ip] if (dns_server_ip | default('', true) | length > 0) else ['192.168.1.1'] }}"
