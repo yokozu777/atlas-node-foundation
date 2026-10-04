@@ -60,6 +60,15 @@ class NodeFoundationLayoutTest(unittest.TestCase):
         self.assertIn("node_foundation_network_serial", text)
         self.assertIn("17_configure_network", text)
         self.assertLess(text.find("role: 07_configure_network_dns"), text.find("role: 11_certificates"))
+        dns_tasks = _role_tasks_main("07_configure_network_dns").read_text(encoding="utf-8")
+        self.assertLess(
+            dns_tasks.find("name: systemd-resolved.service"),
+            dns_tasks.find("dest: /etc/resolv.conf"),
+        )
+        self.assertLess(
+            dns_tasks.find("state: stopped"),
+            dns_tasks.find("dest: /etc/resolv.conf"),
+        )
         self.assertGreater(text.rfind("role: 17_configure_network"), text.find("role: 11_certificates"))
         self.assertNotIn("throttle:", (REPO_ROOT / "roles" / "17_configure_network" / "tasks" / "main.yaml").read_text(encoding="utf-8"))
         # Network play is last after the main role play.

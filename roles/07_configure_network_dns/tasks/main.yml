@@ -1,4 +1,23 @@
 ---
+# Stop resolved before writing resolv.conf. While the unit is running, nsswitch
+# asks it first and ignores this file, so internal names miss BIND.
+- name: Detect systemd-resolved unit
+  ansible.builtin.command: systemctl cat systemd-resolved.service
+  register: systemd_resolved_unit
+  changed_when: false
+  failed_when: false
+  when: dns_servers is defined and dns_servers | length > 0
+
+- name: Stop and disable systemd-resolved
+  ansible.builtin.systemd:
+    name: systemd-resolved.service
+    state: stopped
+    enabled: false
+  when:
+    - dns_servers is defined and dns_servers | length > 0
+    - systemd_resolved_unit is not skipped
+    - systemd_resolved_unit.rc | default(1) == 0
+
 - name: Remove immutable flag from resolv.conf
   ansible.builtin.command: chattr -i /etc/resolv.conf
   when: dns_servers is defined and dns_servers | length > 0
@@ -13,6 +32,7 @@
       nameserver {{ dns }}
       {% endfor %}
     mode: '0644'
+    follow: false
   when: dns_servers is defined and dns_servers | length > 0
   register: resolv_changed
 
